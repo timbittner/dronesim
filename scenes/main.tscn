@@ -1,0 +1,56 @@
+[gd_scene load_steps=7 format=3 uid="uid://68fsb81da54v"]
+
+[ext_resource type="PackedScene" path="res://scenes/drone/drone.tscn" id="1_drone_scene"]
+[ext_resource type="Script" path="res://scripts/camera/chase_camera.gd" id="2_chase_cam"]
+[ext_resource type="PackedScene" path="res://scenes/environment/terrain.tscn" id="3_terrain"]
+[ext_resource type="Script" path="res://scripts/ui/debug_hud.gd" id="4_debug_hud"]
+
+[sub_resource type="BoxMesh" id="BoxMesh_pad"]
+size = Vector3(2, 0.1, 2)
+
+[sub_resource type="BoxShape3D" id="BoxShape_spawn_pad"]
+size = Vector3(2, 0.1, 2)
+
+[sub_resource type="Sky" id="Sky_main"]
+
+[sub_resource type="Environment" id="Env_sky"]
+background_mode = 1
+sky = SubResource("Sky_main")
+ambient_light_source = 2
+ambient_light_color = Color(0.4, 0.45, 0.55, 1)
+ambient_light_energy = 0.5
+fog_enabled = true
+fog_light_color = Color(0.5, 0.6, 0.7, 1)
+fog_density = 0.005
+
+[node name="Main" type="Node3D" unique_id=1501016617]
+
+[node name="Terrain" parent="." instance=ExtResource("3_terrain")]
+
+[node name="SpawnPad" type="MeshInstance3D" parent="." unique_id=611654983]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.05, 0)
+mesh = SubResource("BoxMesh_pad")
+
+[node name="SpawnPadCollision" type="StaticBody3D" parent="SpawnPad"]
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="SpawnPad/SpawnPadCollision"]
+shape = SubResource("BoxShape_spawn_pad")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=1384618151]
+transform = Transform3D(0.86601907, 0.25000688, -0.43302146, 0, 0.86602384, 0.50000274, 0.500011, -0.43301192, 0.74999315, 10, 15, 10)
+light_energy = 1.2
+shadow_enabled = true
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=1052014582]
+environment = SubResource("Env_sky")
+
+[node name="Drone" parent="." unique_id=608845008 instance=ExtResource("1_drone_scene")]
+
+[node name="ChaseCamera" type="Camera3D" parent="." unique_id=171786846]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2, -4)
+script = ExtResource("2_chase_cam")
+target_path = NodePath("../Drone")
+
+[node name="DebugHUD" type="CanvasLayer" parent="."]
+script = ExtResource("4_debug_hud")
+drone_path = NodePath("../Drone")

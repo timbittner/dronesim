@@ -1,0 +1,65 @@
+[gd_scene load_steps=8 format=3]
+
+[ext_resource type="Script" path="res://scripts/drone/drone_controller.gd" id="1_drone_ctrl"]
+[ext_resource type="Script" path="res://scripts/drone/drone_body_mesh.gd" id="2_drone_body"]
+[ext_resource type="Script" path="res://scripts/drone/debug_axes.gd" id="3_debug_axes"]
+
+[sub_resource type="StandardMaterial3D" id="Mat_body"]
+albedo_color = Color(0.2, 0.2, 0.25, 1)
+
+[sub_resource type="CylinderMesh" id="CylMesh_rotor"]
+top_radius = 0.0
+bottom_radius = 0.08
+height = 0.02
+
+[sub_resource type="StandardMaterial3D" id="Mat_rotor"]
+albedo_color = Color(0.1, 0.1, 0.12, 1)
+
+[sub_resource type="BoxShape3D" id="BoxShape_collision"]
+size = Vector3(0.4, 0.12, 0.4)
+
+[sub_resource type="SphereMesh" id="SphereMesh_cam"]
+radius = 0.04
+height = 0.08
+
+[node name="Drone" type="RigidBody3D"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.5, 0)
+mass = 2.0
+gravity_scale = 1.0
+script = ExtResource("1_drone_ctrl")
+
+[node name="Body" type="MeshInstance3D" parent="."]
+surface_material_override_0 = SubResource("Mat_body")
+script = ExtResource("2_drone_body")
+
+[node name="RotorFL" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.25, 0.07, 0.25)
+mesh = SubResource("CylMesh_rotor")
+surface_material_override_0 = SubResource("Mat_rotor")
+
+[node name="RotorFR" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.25, 0.07, 0.25)
+mesh = SubResource("CylMesh_rotor")
+surface_material_override_0 = SubResource("Mat_rotor")
+
+[node name="RotorBL" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.25, 0.07, -0.25)
+mesh = SubResource("CylMesh_rotor")
+surface_material_override_0 = SubResource("Mat_rotor")
+
+[node name="RotorBR" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.25, 0.07, -0.25)
+mesh = SubResource("CylMesh_rotor")
+surface_material_override_0 = SubResource("Mat_rotor")
+
+[node name="CameraMount" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.04, 0.15)
+mesh = SubResource("SphereMesh_cam")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+shape = SubResource("BoxShape_collision")
+
+[node name="CameraRig" type="Node3D" parent="."]
+
+[node name="DebugAxes" type="Node3D" parent="."]
+script = ExtResource("3_debug_axes")
