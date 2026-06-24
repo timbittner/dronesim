@@ -2,13 +2,20 @@ class_name ChaseCamera
 extends Camera3D
 
 ## Chase camera that follows the drone.
-## FPV: rigidly locked to drone - no lerp, no lag.
+## FPV: camera position rigidly locked to drone nose (no drift). Camera
+##       rotation is smoothed via quaternion slerp to mask control-loop
+##       jitter without the position-drift bugs of a full spring arm.
 ## Chase: follows behind based on drone yaw only, looks directly at drone.
 
 @export var target_path: NodePath = ""  # Set to the drone node
 @export var chase_distance: float = 4.0
 @export var chase_height: float = 1.5
 @export var follow_speed: float = 8.0
+
+## FPV rotation smoothing factor (0..1). Higher = more smoothing.
+## 0.92 means the camera covers 92% of the gap per frame — ~4 frames to settle.
+## This filters out high-frequency control-loop jitter while remaining responsive.
+@export var fpv_smoothing: float = 0.92
 
 var _target: Node3D
 var _fpv: bool = true  # FPV by default
@@ -30,23 +37,28 @@ func _physics_process(delta: float) -> void:
 		return
 
 	if _fpv:
-		_update_fpv()
+		_update_fpv(delta)
 	else:
 		_update_chase(delta)
 
 
-func _update_fpv() -> void:
-	# FPV: camera is rigidly locked to the drone. No lerp, no lag.
-	# Drone forward is -Z (arrow nose), Camera3D also looks down -Z by default.
-	# Camera sits at the nose tip so the body doesn't obstruct the view.
+func _update_fpv(delta: float) -> void:
+	# Position: rigidly locked to drone nose — no lerp, no drift.
 	var fpv_offset: Vector3 = _target.global_transform.basis * Vector3(0, 0.02, -0.28)
 	global_position = _target.global_position + fpv_offset
-	global_transform.basis = _target.global_transform.basis
+
+	# Rotation: smoothed via quaternion slerp to mask control-loop jitter.
+	# The position is rigid, so there's no drift bug.
+	var target_quat: Quaternion = _target.global_transform.basis.get_rotation_quaternion()
+	var current_quat: Quaternion = global_transform.basis.get_rotation_quaternion()
+	# Use delta-adjusted lerp for frame-rate independence
+	var lerp_factor: float = 1.0 - pow(1.0 - fpv_smoothing, 60.0 * delta)
+	var smoothed: Quaternion = current_quat.slerp(target_quat, lerp_factor)
+	global_transform.basis = Basis(smoothed)
 
 
 func _update_chase(delta: float) -> void:
 	# Chase: follow behind the drone based on yaw only (ignore pitch/roll tilt).
-	# Drone forward is -Z, so behind = +Z direction.
 	var drone_yaw: float = _target.global_rotation.y
 	var offset_dir: Vector3 = Vector3(sin(drone_yaw), 0, cos(drone_yaw))
 	var target_pos: Vector3 = _target.global_position + Vector3(0, chase_height, 0) + offset_dir * chase_distance

@@ -1,62 +1,83 @@
 class_name FlightModeStabilized
 extends FlightModeBase
 
-## Stabilized flight mode with auto-leveling.
+## Stabilized flight mode with auto-leveling, using per-rotor thrust vectoring.
 ##
-## When sticks are near center (within deadzone): the drone auto-levels
-## using a PD controller. The correction is computed in world frame
-## using the cross product of body-up and world-up, then converted to
-## body frame for the controller.
+## Control signals: collective hover base + PD-corrected pitch/roll differentials.
+## Yaw: direct stick-to-torque mapping (same as acro), no stabilizer intervention.
 ##
-## When sticks are active: operates as a rate controller — stick input
-## maps to a target angular velocity, and a proportional controller
-## drives the drone toward that rate.
+## Auto-level uses a blended P gain below ANGLE_DEADZONE — instead of a hard
+## on/off switch, the P gain ramps linearly from 0 at 0° tilt to full strength
+## at the deadzone boundary. The D gain is always active. This eliminates the
+## limit-cycle oscillation (twitching) that hard deadzones produce.
+
+## Per-rotor hover throttle (set by controller: (mass * g) / (4 * max_thrust)).
+var hover_throttle: float = 0.0
 
 # --- Auto-level PD gains ---
 @export var stabilize_p_gain: float = 15.0
 @export var stabilize_d_gain: float = 4.0
 
+# --- Auto-level angle deadzone (radians) ---
+## P gain blends from 0 to full over this range, preventing hard on/off cycling.
+const ANGLE_DEADZONE: float = 0.0262  # ~1.5 degrees
+
 # --- Rate control parameters ---
-@export var max_pitch_rate: float = 3.0   # rad/s
-@export var max_roll_rate: float = 3.0    # rad/s
-@export var max_yaw_rate: float = 2.0     # rad/s
-@export var rate_p_gain: float = 5.0
+@export var max_pitch_rate: float = 1.5   # rad/s
+@export var max_roll_rate: float = 1.5    # rad/s
+@export var max_yaw_rate: float = 1.0     # rad/s
+@export var rate_p_gain: float = 4.0
 
 # --- Deadzone ---
-@export var input_deadzone: float = 0.15
+## Stick must return very near center before auto-level engages.
+@export var input_deadzone: float = 0.05
+
+# --- Differential clipping limit ---
+@export var max_offset: float = 0.4
+
+## Conversion: torque = max_thrust * δ → δ = torque / max_thrust
+const TORQUE_TO_OFFSET: float = 1.0 / 50.0
 
 
-func compute_torque(
+func compute(
+	throttle: float,
 	pitch: float,
 	roll: float,
 	yaw: float,
 	basis: Basis,
 	angular_velocity: Vector3,
 	_delta: float
-) -> Vector3:
-	# Convert angular velocity from world frame to local (body) frame
-	var local_angular_velocity: Vector3 = basis.inverse() * angular_velocity
+) -> FlightControl:
+	var result := FlightControl.new()
 
-	# Check if any attitude stick is active (beyond deadzone)
+	# Collective hover base (throttle input adjusts altitude).
+	result.collective = clampf(hover_throttle + throttle * 0.15, 0.0, 1.0)
+
+	# Convert angular velocity to body frame
+	var local_ang_vel: Vector3 = basis.inverse() * angular_velocity
+
+	# Check if any attitude stick is active
 	var stick_active: bool = absf(pitch) > input_deadzone \
 		or absf(roll) > input_deadzone \
 		or absf(yaw) > input_deadzone
 
 	if stick_active:
-		# --- Rate mode: stick input = target angular velocity ---
-		# Returns body-frame torque
+		# --- Rate mode: stick = target angular velocity, then PD ---
 		var target_rate: Vector3 = Vector3(
 			pitch * max_pitch_rate,
-			-yaw * max_yaw_rate,
+			yaw * max_yaw_rate,
 			-roll * max_roll_rate
 		)
-		return (target_rate - local_angular_velocity) * rate_p_gain
+		var rate_error: Vector3 = target_rate - local_ang_vel
+		var desired_torque: Vector3 = rate_error * rate_p_gain
+
+		result.pitch_diff = desired_torque.x * TORQUE_TO_OFFSET
+		result.roll_diff = -desired_torque.z * TORQUE_TO_OFFSET
+		# Yaw: direct mapping, same as acro
+		result.yaw_torque = yaw * 1.5
 
 	else:
-		# --- Auto-level: world-frame correction then convert to body ---
-		# Compute the cross product of body-up (basis.y) and world-up.
-		# This gives the world-space rotation axis to align body-up with world-up.
-		# Then use the actual angle from acos(dot) for correct torque magnitude.
+		# --- Auto-level: blended PD on tilt error ---
 		var body_up: Vector3 = basis.y
 		var world_up: Vector3 = Vector3.UP
 
@@ -65,20 +86,30 @@ func compute_torque(
 
 		var world_restoring: Vector3 = Vector3.ZERO
 		if axis.length_squared() > 1.0e-6:
-			world_restoring = axis.normalized() * angle * stabilize_p_gain
+			# Blend P gain from 0 at 0° to full at ANGLE_DEADZONE boundary.
+			# This eliminates the limit-cycle jitter that hard deadzones cause.
+			var effective_p_gain: float = stabilize_p_gain
+			if angle < ANGLE_DEADZONE:
+				effective_p_gain *= angle / ANGLE_DEADZONE
+			world_restoring = axis.normalized() * angle * effective_p_gain
 
-		# Derivative damping in world frame
+		# D gain always active — provides damping at all angles
 		var world_damping: Vector3 = -angular_velocity * stabilize_d_gain
-
-		# Convert world-frame correction to body frame for the controller
-		# (controller applies basis * body_torque to get back to world frame)
 		var world_torque: Vector3 = world_restoring + world_damping
 
-		# Zero out yaw component in body frame (keep yaw from auto-level)
+		# Convert to body frame, zero out yaw (no yaw auto-level)
 		var body_torque: Vector3 = basis.inverse() * world_torque
 		body_torque.y = 0.0
 
-		return body_torque
+		result.pitch_diff = body_torque.x * TORQUE_TO_OFFSET
+		result.roll_diff = -body_torque.z * TORQUE_TO_OFFSET
+		result.yaw_torque = 0.0
+
+	# Clamp individual diffs to max_offset
+	result.pitch_diff = clampf(result.pitch_diff, -max_offset, max_offset)
+	result.roll_diff = clampf(result.roll_diff, -max_offset, max_offset)
+
+	return result
 
 
 func get_mode_name() -> String:

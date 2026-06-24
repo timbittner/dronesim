@@ -1,39 +1,41 @@
 class_name FlightModeAcro
 extends FlightModeBase
 
-## Acro (rate) flight mode.
-## Maps stick input directly to torque with no auto-leveling.
-## Preserves the exact behavior from the original drone_controller.gd's _apply_torque().
+## Acro (rate) mode with per-rotor thrust vectoring.
+## Maps stick input directly to rotor differentials — no auto-leveling.
+## Left stick Y = collective throttle, right stick = differential speed.
 
-@export var pitch_torque: float = 8.0
-@export var roll_torque: float = 8.0
-@export var yaw_torque: float = 5.0
+## Per-rotor hover throttle (set by controller: (mass * g) / (4 * max_thrust)).
+var hover_throttle: float = 0.0
+
+## Maximum throttle offset per rotor from stick input (fraction of 0..1 range).
+## Reduced ~7x from initial value — per-rotor thrust is very direct.
+@export var max_differential: float = 0.02
+
+## Fraction of throttle range available to user stick input (added to hover).
+# With 4 rotors, total thrust = 4x per-rotor, so range is 1/4 of old central-force value.
+@export var throttle_range: float = 0.15
+
+## Yaw torque factor (Nm per unit input).
+## Reduced from 5.0 — yaw was way too twitchy.
+@export var yaw_torque_factor: float = 1.5
 
 
-func compute_torque(
-	_pitch: float,
-	_roll: float,
-	_yaw: float,
+func compute(
+	throttle: float,
+	pitch: float,
+	roll: float,
+	yaw: float,
 	_basis: Basis,
 	_angular_velocity: Vector3,
 	_delta: float
-) -> Vector3:
-	# Coordinate system: X+ = right, Y+ = up, Z+ = back, -Z = forward.
-	#
-	# Pitch (X axis): stick forward (_pitch < 0) should nose down (-Z dips).
-	#   Negative _pitch * positive torque = negative X torque = nose down.
-	#
-	# Roll (Z axis): stick left (_roll < 0) should roll left (counterclockwise from behind).
-	#   In Godot right-hand system, positive Z rotation = counterclockwise when viewed from +Z (behind).
-	#   So roll_left needs negative _roll mapped to positive Z torque => negate.
-	#
-	# Yaw (Y axis): stick right (_yaw > 0) should rotate clockwise (turn right).
-	#   Positive Y rotation = counterclockwise from above, so negate for right turn.
-	return Vector3(
-		_pitch * pitch_torque,
-		-_yaw * yaw_torque,
-		-_roll * roll_torque
-	)
+) -> FlightControl:
+	var result := FlightControl.new()
+	result.collective = clampf(hover_throttle + throttle * throttle_range, 0.0, 1.0)
+	result.pitch_diff = pitch * max_differential
+	result.roll_diff = roll * max_differential
+	result.yaw_torque = yaw * yaw_torque_factor
+	return result
 
 
 func get_mode_name() -> String:

@@ -68,7 +68,7 @@ func _gather_telemetry() -> Dictionary:
 	var speed_mps: float = _drone.linear_velocity.length()
 	var altitude: float = _drone.global_position.y
 	var throttle_pct: float = clampf(
-		_drone.hover_throttle + _drone._throttle_input * 0.6, 0.0, 1.0
+		_drone.hover_throttle + _drone._throttle_input * 0.15, 0.0, 1.0
 	) * 100.0
 
 	return {
@@ -119,7 +119,7 @@ func _format_telemetry_compact(t: Dictionary) -> String:
 
 
 func _build_ui() -> void:
-	# ——— Top-left telemetry panel (existing) ———
+	# ——— Top-left telemetry panel ———
 	_bg = ColorRect.new()
 	_bg.color = Color(0.0, 0.0, 0.0, 0.65)
 	_bg.set_anchors_preset(Control.PRESET_TOP_LEFT)

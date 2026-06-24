@@ -74,8 +74,6 @@ mesh = SubResource("SphereMesh_cam")
 [node name="CollisionShape3D" type="CollisionShape3D" parent="." unique_id=1194695645]
 shape = SubResource("BoxShape_collision")
 
-[node name="CameraRig" type="Node3D" parent="." unique_id=1210050300]
-
 [node name="DebugAxes" type="Node3D" parent="." unique_id=907916977]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.053726792, 0)
 script = ExtResource("3_debug_axes")

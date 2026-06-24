@@ -2,56 +2,64 @@ class_name DroneController
 extends RigidBody3D
 
 ## Core drone flight controller.
-## P0: direct thrust + torque, no flight mode logic yet.
+## Three-layer pipeline: FlightMode → Mixer → Force application.
+## Per-rotor thrust vectoring: each rotor applies force at its arm position.
 ## Mode 2 layout: left stick = throttle/yaw, right stick = pitch/roll.
 
 signal flight_mode_changed(mode_name: String)
 signal fpv_toggled(enabled: bool)
 
 # --- Thrust ---
-# Drone mass = 2.0kg, gravity = 9.8 m/s^2, so weight = 19.6N.
-# hover_throttle must produce ~19.6N to cancel gravity.
-@export var max_thrust: float = 50.0  # Newtons - 2.5x weight for aggressive climbing
-var hover_throttle: float = 0.0  # Computed dynamically in _ready() to exactly cancel gravity
+@export var max_thrust: float = 50.0  # Newtons per rotor
+
+# Per-rotor hover throttle: (mass * gravity) / (4 * max_thrust)
+var hover_throttle: float = 0.0
+
+# --- Angular damping ---
+## Prevents spin-out. Yaw gets higher damping — roll maneuvers can induce
+## yaw via natural thumb drift on the stick, and this keeps it in check.
+@export var damping_factor: Vector3 = Vector3(0.08, 1.0, 0.08)  # pitch, yaw, roll
 
 # --- Flight modes ---
 var _flight_modes: Dictionary = {}
 var _current_mode: FlightModeBase = null
 
-# --- Angular damping (simulates air resistance on rotors) ---
-@export var angular_damping_factor: float = 0.5
-
 # --- State ---
-var _throttle_input: float = 0.0  # -1..1
+var _throttle_input: float = 0.0
 var _pitch_input: float = 0.0
 var _roll_input: float = 0.0
 var _yaw_input: float = 0.0
 var _fpv_enabled: bool = true
 var _spawn_transform: Transform3D
 
-# Flight mode: "stabilized" or "acro". P0 just uses stabilized (direct control).
 var _flight_mode: String = "stabilized"
 
-# Node refs
-@onready var camera_rig: Node3D = get_node_or_null("CameraRig")
+# Rotor positions in local body frame.
+var _rotor_positions: Array[Vector3] = [
+	Vector3(-0.25, 0.07,  0.25),  # FL — left-rear
+	Vector3( 0.25, 0.07,  0.25),  # FR — right-rear
+	Vector3(-0.25, 0.07, -0.25),  # BL — left-front
+	Vector3( 0.25, 0.07, -0.25),  # BR — right-front
+]
 
 
 func _ready() -> void:
 	_spawn_transform = global_transform
 	gravity_scale = 1.0
-	# Custom angular damping in _physics_process instead of built-in
 	angular_damp = 0.0
-	linear_damp = 0.5  # gentle air resistance to prevent drift accumulation
-	# Compute hover throttle dynamically so it exactly cancels gravity.
-	# hover_force = mass * gravity, and hover_force = max_thrust * hover_throttle,
-	# therefore hover_throttle = (mass * gravity) / max_thrust.
-	var gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity")
-	hover_throttle = (mass * gravity) / max_thrust
-	body_entered.connect(_on_body_entered)
+	linear_damp = 0.5
 
-	# Initialize flight modes
-	_flight_modes["stabilized"] = FlightModeStabilized.new()
-	_flight_modes["acro"] = FlightModeAcro.new()
+	var gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity")
+	hover_throttle = (mass * gravity) / (4.0 * max_thrust)
+
+	var acro := FlightModeAcro.new()
+	acro.hover_throttle = hover_throttle
+	_flight_modes["acro"] = acro
+
+	var stabilized := FlightModeStabilized.new()
+	stabilized.hover_throttle = hover_throttle
+	_flight_modes["stabilized"] = stabilized
+
 	_current_mode = _flight_modes[_flight_mode]
 
 
@@ -66,59 +74,83 @@ func _unhandled_input(event: InputEvent) -> void:
 
 func _physics_process(delta: float) -> void:
 	_read_inputs()
-	_apply_thrust()
-	_apply_torque(delta)
+	_compute_and_apply_forces(delta)
 	_apply_angular_damping()
-	_update_camera_rig()
 
 
 func _read_inputs() -> void:
-	# Throttle: up = positive, down = negative. get_vector gives us -1..1 on each axis.
-	# Use get_action_strength (applies deadzone) so non-centered sticks don't drift.
 	_throttle_input = Input.get_action_strength("throttle_up") - Input.get_action_strength("throttle_down")
 	_yaw_input = Input.get_action_strength("yaw_right") - Input.get_action_strength("yaw_left")
 	_pitch_input = Input.get_action_strength("pitch_backward") - Input.get_action_strength("pitch_forward")
 	_roll_input = Input.get_action_strength("roll_right") - Input.get_action_strength("roll_left")
 
 
-func _apply_thrust() -> void:
-	# Total throttle = hover offset + user input, clamped 0..1
-	var total_throttle: float = clampf(hover_throttle + _throttle_input * 0.6, 0.0, 1.0)
-	var thrust_force: float = max_thrust * total_throttle
-	# Thrust is along the drone's local up vector (rotors push up relative to body)
-	var up: Vector3 = global_transform.basis.y
-	apply_central_force(up * thrust_force)
-
-
-func _apply_torque(delta: float) -> void:
+func _compute_and_apply_forces(delta: float) -> void:
 	if _current_mode == null:
 		return
-	var torque_vec: Vector3 = _current_mode.compute_torque(
-		_pitch_input,
-		_roll_input,
-		_yaw_input,
-		global_transform.basis,
-		angular_velocity,
-		delta
+
+	var control: FlightModeBase.FlightControl = _current_mode.compute(
+		_throttle_input, _pitch_input, _roll_input, _yaw_input,
+		global_transform.basis, angular_velocity, delta
 	)
-	# Convert local torque to world-space and apply
-	apply_torque(global_transform.basis * torque_vec)
+
+	var mix := _mix_rotors(control.collective, control.pitch_diff, control.roll_diff)
+
+	var up: Vector3 = global_transform.basis.y
+	var throttles: Array[float] = [mix.fl, mix.fr, mix.bl, mix.br]
+	for i in range(4):
+		var force: Vector3 = up * throttles[i] * max_thrust
+		var global_pos: Vector3 = global_transform.basis * _rotor_positions[i]
+		apply_force(force, global_pos)
+
+	if control.yaw_torque != 0.0:
+		apply_torque(global_transform.basis * Vector3(0.0, -control.yaw_torque, 0.0))
+
+
+## Minimum rotor throttle fraction. Prevents any rotor from fully cutting out
+## during aggressive maneuvers (when collective is positive). Does NOT prevent
+## throttle cut — if the user commands zero collective, all rotors go to zero.
+const MIN_ROTOR: float = 0.02
+
+## Convert collective + differentials to per-rotor throttles with anti-clip scaling.
+static func _mix_rotors(collective: float, pitch: float, roll: float) -> FlightModeBase.RotorMix:
+	# Throttle cut: user commanded zero power, all rotors off.
+	if collective < 0.001:
+		var cut_result := FlightModeBase.RotorMix.new()
+		cut_result.fl = 0.0
+		cut_result.fr = 0.0
+		cut_result.bl = 0.0
+		cut_result.br = 0.0
+		return cut_result
+
+	# Anti-clip scaling: prevent differentials from pushing any rotor below
+	# MIN_ROTOR (or above 1.0) while preserving the pitch/roll ratio.
+	var total_correction: float = absf(pitch) + absf(roll)
+	var headroom: float = minf(collective - MIN_ROTOR, 1.0 - collective)
+	var clipped_pitch: float = pitch
+	var clipped_roll: float = roll
+	if total_correction > headroom and total_correction > 0.001:
+		var clip_scale: float = headroom / total_correction
+		clipped_pitch *= clip_scale
+		clipped_roll *= clip_scale
+
+	var result := FlightModeBase.RotorMix.new()
+	result.fl = collective - clipped_pitch + clipped_roll
+	result.fr = collective - clipped_pitch - clipped_roll
+	result.bl = collective + clipped_pitch + clipped_roll
+	result.br = collective + clipped_pitch - clipped_roll
+	# Final clamp: MIN_ROTOR only applies when collective is on (throttle not cut)
+	result.fl = clampf(result.fl, MIN_ROTOR, 1.0)
+	result.fr = clampf(result.fr, MIN_ROTOR, 1.0)
+	result.bl = clampf(result.bl, MIN_ROTOR, 1.0)
+	result.br = clampf(result.br, MIN_ROTOR, 1.0)
+	return result
 
 
 func _apply_angular_damping() -> void:
-	# Simple angular damping: opposes current angular velocity
-	# This simulates rotor drag / air resistance stabilizing the drone
-	var ang_vel: Vector3 = angular_velocity
-	apply_torque(-ang_vel * angular_damping_factor)
-
-
-func _update_camera_rig() -> void:
-	if camera_rig == null:
-		return
-	# Camera rig follows the drone. FPV toggle switches the camera position.
-	# Actual camera logic lives in the CameraRig script (P1), here we just
-	# keep the rig centered on the drone.
-	pass
+	var local_ang_vel: Vector3 = global_transform.basis.inverse() * angular_velocity
+	var damp_torque_local: Vector3 = -local_ang_vel * damping_factor
+	apply_torque(global_transform.basis * damp_torque_local)
 
 
 func _toggle_flight_mode() -> void:
@@ -135,16 +167,10 @@ func _toggle_fpv() -> void:
 
 
 func reset() -> void:
-	# Reset to spawn position and zero all velocities
 	linear_velocity = Vector3.ZERO
 	angular_velocity = Vector3.ZERO
 	global_transform = _spawn_transform
 	print("[Drone] Reset to spawn")
-
-
-func _on_body_entered(_body: Node) -> void:
-	# Crash detection placeholder - P2 will add proper crash logic
-	pass
 
 
 func get_flight_mode() -> String:
