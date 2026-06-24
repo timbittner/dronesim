@@ -3,7 +3,8 @@ extends CanvasLayer
 
 ## On-screen debug HUD for drone telemetry.
 ## Displays stick inputs, attitude angles, speed, altitude, flight mode, FPV status.
-## Also prints a one-line telemetry summary every 60 frames for MCP debug capture.
+## Also shows a world-axis gizmo (Minecraft F3-style) and drone XYZ in bottom-left.
+## Prints a one-line telemetry summary every 60 frames for MCP debug capture.
 
 @export var drone_path: NodePath = NodePath("../Drone")
 @export var print_interval: int = 60  # frames between console telemetry prints
@@ -15,10 +16,21 @@ var _frame_count: int = 0
 var _label: Label
 var _bg: ColorRect
 
+# Axis gizmo + coords (bottom-left)
+var _gizmo_panel: ColorRect
+var _gizmo_canvas: Control
+var _coord_label: Label
+
+# Cached font for _draw_string
+var _gizmo_font: Font
+var _gizmo_font_size: int = 14
+
 
 func _ready() -> void:
 	_drone = get_node_or_null(drone_path) as DroneController
 	_build_ui()
+	_gizmo_font = ThemeDB.fallback_font
+	_gizmo_font_size = ThemeDB.fallback_font_size
 
 
 func _process(_delta: float) -> void:
@@ -30,6 +42,13 @@ func _process(_delta: float) -> void:
 	var telemetry: Dictionary = _gather_telemetry()
 	_label.text = _format_telemetry(telemetry)
 
+	# Update coordinates
+	var pos: Vector3 = _drone.global_position
+	_coord_label.text = "X %+7.2f  Y %+7.2f  Z %+7.2f" % [pos.x, pos.y, pos.z]
+
+	# Redraw axis gizmo every frame
+	_gizmo_canvas.queue_redraw()
+
 	_frame_count += 1
 	if _frame_count >= print_interval:
 		_frame_count = 0
@@ -39,7 +58,6 @@ func _process(_delta: float) -> void:
 func _gather_telemetry() -> Dictionary:
 	var euler: Vector3 = _drone.global_transform.basis.get_euler()
 	var heading_deg: float = rad_to_deg(euler.y)
-	# Normalize heading to 0..360
 	while heading_deg < 0.0:
 		heading_deg += 360.0
 	while heading_deg >= 360.0:
@@ -101,7 +119,7 @@ func _format_telemetry_compact(t: Dictionary) -> String:
 
 
 func _build_ui() -> void:
-	# Semi-transparent background
+	# ——— Top-left telemetry panel (existing) ———
 	_bg = ColorRect.new()
 	_bg.color = Color(0.0, 0.0, 0.0, 0.65)
 	_bg.set_anchors_preset(Control.PRESET_TOP_LEFT)
@@ -111,27 +129,93 @@ func _build_ui() -> void:
 	_bg.offset_top = 8.0
 	add_child(_bg)
 
-	# Monospace label
 	_label = Label.new()
 	_label.add_theme_font_size_override("font_size", 13)
-	# Try to use a monospace font; falls back to default if not available
 	_try_load_monospace_font(_label)
 	_label.set_anchors_preset(Control.PRESET_TOP_LEFT)
 	_label.offset_left = 14.0
 	_label.offset_top = 14.0
 	_label.offset_right = 282.0
 	_label.offset_bottom = 342.0
-	# Green text for that classic HUD look
 	_label.add_theme_color_override("font_color", Color(0.35, 1.0, 0.35))
 	_label.add_theme_color_override("font_outline_color", Color(0, 0, 0))
 	_label.add_theme_constant_override("outline_size", 2)
 	_label.text = "Waiting for drone..."
 	add_child(_label)
 
+	# ——— Top-right axis gizmo + coords ———
+	_gizmo_panel = ColorRect.new()
+	_gizmo_panel.color = Color(0.0, 0.0, 0.0, 0.65)
+	_gizmo_panel.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	_gizmo_panel.offset_left = -130.0
+	_gizmo_panel.offset_top = 8.0
+	_gizmo_panel.offset_right = -8.0
+	_gizmo_panel.offset_bottom = 110.0
+	add_child(_gizmo_panel)
+
+	# Custom Control that draws the axis cross
+	_gizmo_canvas = Control.new()
+	_gizmo_canvas.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_gizmo_canvas.draw.connect(_on_gizmo_draw)
+	_gizmo_panel.add_child(_gizmo_canvas)
+
+	# XYZ coordinate label below the gizmo
+	_coord_label = Label.new()
+	_coord_label.add_theme_font_size_override("font_size", 11)
+	_try_load_monospace_font(_coord_label)
+	_coord_label.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	_coord_label.offset_left = 6.0
+	_coord_label.offset_bottom = -6.0
+	_coord_label.add_theme_color_override("font_color", Color(0.35, 1.0, 0.35))
+	_coord_label.add_theme_color_override("font_outline_color", Color(0, 0, 0))
+	_coord_label.add_theme_constant_override("outline_size", 1)
+	_coord_label.text = "X    0.00  Y    0.00  Z    0.00"
+	_gizmo_panel.add_child(_coord_label)
+
+
+func _on_gizmo_draw() -> void:
+	## Draws X (red), Y (green), Z (blue) world axes as seen from the camera.
+	var cam := get_viewport().get_camera_3d()
+	if not cam or not is_instance_valid(cam):
+		return
+
+	var gizmo_size := _gizmo_canvas.get_size()
+	var center := gizmo_size * Vector2(0.5, 0.4)
+	var arm_len := 26.0
+	var cam_basis := cam.global_transform.basis.inverse()
+
+	var axes := {
+		"X": Vector3.RIGHT,
+		"Y": Vector3.UP,
+		"Z": Vector3.FORWARD,
+	}
+	var colors := {
+		"X": Color(1.0, 0.25, 0.25),
+		"Y": Color(0.25, 1.0, 0.25),
+		"Z": Color(0.3, 0.5, 1.0),
+	}
+
+	for label in ["X", "Y", "Z"]:
+		var world_dir := axes[label] as Vector3
+		# Transform to camera-local space, then to 2D screen
+		var cam_local := cam_basis * world_dir
+		var screen_dir := Vector2(cam_local.x, -cam_local.y) * arm_len
+		var tip := center + screen_dir
+
+		# Draw the line
+		_gizmo_canvas.draw_line(center, tip, colors[label], 2.0, false)
+
+		# Draw the label slightly past the tip
+		_gizmo_canvas.draw_string(
+			_gizmo_font, tip + Vector2(3, -3), label,
+			HORIZONTAL_ALIGNMENT_LEFT, -1, _gizmo_font_size, colors[label]
+		)
+
+	# Small dot at center
+	_gizmo_canvas.draw_circle(center, 2.0, Color(1, 1, 1, 0.6))
+
 
 func _try_load_monospace_font(label: Label) -> void:
-	# Attempt to load a monospace font from common locations; silently fall back
-	# to the engine default if no font file is found.
 	for font_path in ["res://assets/fonts/mono.woff2", "res://assets/fonts/mono.ttf", "res://assets/fonts/monospace.ttf"]:
 		if not FileAccess.file_exists(font_path):
 			continue
