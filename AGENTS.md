@@ -8,9 +8,9 @@ flight physics, autonomous routing, weather, and threat simulation.
 
 **Current phase:** P0 complete — flyable single drone. P1 stabilized mode implemented
 but oscillates under load (PD-on-torque approach has fundamental issues).
-**Next phase:** Per-rotor thrust vectoring — replaces the central-force + abstract-torque
-model with individual rotor force vectors applied at each arm position. Acro first,
-then stable-only stabilized.
+**Next phase (per-rotor thrust vectoring):** See "Session Start: Per-Rotor Migration" below.
+The plan: replace central-force + abstract-torque with individual rotor force vectors
+applied at each arm position. Acro first, then stabilized on top of the real physics.
 
 ## Tech Stack
 
@@ -113,3 +113,59 @@ assets/
 ## License
 
 Private project. No license file needed yet.
+
+---
+
+## Session Start: Per-Rotor Thrust Vectoring
+
+**Goal:** Replace the current `apply_central_force + apply_torque` model with individual
+rotor forces. Each rotor applies thrust at its position on the drone, creating pitch,
+roll, and yaw torque naturally through speed differentials.
+
+### Phase 1: Acro Mode (Pure Mixer)
+
+1. Add a **rotor mixer** function to `drone_controller.gd`: `_mix_rotors(inputs) → array[4]`
+2. Each rotor position is defined in `drone.tscn`:
+   - FL: (-0.25, 0.07, 0.25), FR: (0.25, 0.07, 0.25) — pink (rear)
+   - BL: (-0.25, 0.07, -0.25), BR: (0.25, 0.07, -0.25) — teal (front)
+3. Acro mixer: left stick Y = collective throttle, right stick = differential speed
+   - Pitch forward: front rotors (teal) faster, rear (pink) slower
+   - Roll right: right rotors faster, left slower
+   - Yaw: CW rotors faster vs CCW rotors → drag torque
+4. Remove `_apply_thrust()`, `_apply_torque()`, `_apply_angular_damping()`
+5. Keep `FlightModeAcro` but change its interface from `compute_torque` → `mix_rotors`
+6. Update test harness: acro tests now assert rotation under differential thrust
+7. Fly it. Should feel identical to current acro but with correct physics.
+
+### Phase 2: Stabilized Mode (On Top of Mixer)
+
+8. `FlightModeStabilized.mix_rotors()` computes rotor speeds directly:
+   - Base: collective hover throttle on all 4 rotors
+   - Pitch correction: front/rear speed offset proportional to pitch angle
+   - Roll correction: left/right speed offset proportional to roll angle
+   - Yaw correction: CW/CCW speed offset proportional to yaw rate
+   - PID gains tune the offsets, not abstract torque
+9. Remove PD-on-torque code entirely. Replace with PD-on-rotor-differential.
+10. Update test assertions. Stabilized tests should now converge cleanly without oscillation.
+
+### File Changes Summary
+
+| File | Action |
+|---|---|
+| `drone_controller.gd` | Remove `_apply_thrust`, `_apply_torque`, `_apply_angular_damping`. Add `_mix_rotors`. |
+| `flight_mode_base.gd` | Change virtual method from `compute_torque` → `mix_rotors(inputs) -> RotorMix` |
+| `flight_mode_acro.gd` | Rewrite as mixer. Direct differential mapping. |
+| `flight_mode_stabilized.gd` | Rewrite as mixer. PD on rotor differentials, not torque. |
+| `flight_mode_test.gd` | Update test cases. Acro tests verify differential rotation. Stabilized tests verify convergence. |
+
+### Data Structure
+
+```gdscript
+struct RotorMix:
+    var fl: float  # 0.0..1.0 throttle
+    var fr: float
+    var bl: float
+    var br: float
+```
+
+Each force: `apply_force(rotor_position, basis.y * rotor_throttle * max_thrust)`
