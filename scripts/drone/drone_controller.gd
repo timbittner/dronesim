@@ -14,10 +14,9 @@ signal fpv_toggled(enabled: bool)
 @export var max_thrust: float = 50.0  # Newtons - 2.5x weight for aggressive climbing
 var hover_throttle: float = 0.0  # Computed dynamically in _ready() to exactly cancel gravity
 
-# --- Attitude control (torque) ---
-@export var pitch_torque: float = 8.0
-@export var roll_torque: float = 8.0
-@export var yaw_torque: float = 5.0
+# --- Flight modes ---
+var _flight_modes: Dictionary = {}
+var _current_mode: FlightModeBase = null
 
 # --- Angular damping (simulates air resistance on rotors) ---
 @export var angular_damping_factor: float = 3.0
@@ -50,6 +49,11 @@ func _ready() -> void:
 	hover_throttle = (mass * gravity) / max_thrust
 	body_entered.connect(_on_body_entered)
 
+	# Initialize flight modes
+	_flight_modes["stabilized"] = FlightModeStabilized.new()
+	_flight_modes["acro"] = FlightModeAcro.new()
+	_current_mode = _flight_modes[_flight_mode]
+
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("toggle_flight_mode"):
@@ -60,10 +64,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		reset()
 
 
-func _physics_process(_delta: float) -> void:
+func _physics_process(delta: float) -> void:
 	_read_inputs()
 	_apply_thrust()
-	_apply_torque()
+	_apply_torque(delta)
 	_apply_angular_damping()
 	_update_camera_rig()
 
@@ -86,22 +90,16 @@ func _apply_thrust() -> void:
 	apply_central_force(up * thrust_force)
 
 
-func _apply_torque() -> void:
-	# Coordinate system: X+ = right, Y+ = up, Z+ = back, -Z = forward.
-	#
-	# Pitch (X axis): stick forward (_pitch_input < 0) should nose down (-Z dips).
-	#   Negative _pitch_input * positive torque = negative X torque = nose down. Correct.
-	#
-	# Roll (Z axis): stick left (_roll_input < 0) should roll left (counterclockwise from behind).
-	#   In Godot right-hand system, positive Z rotation = counterclockwise when viewed from +Z (behind).
-	#   So roll_left needs negative _roll_input mapped to positive Z torque => negate.
-	#
-	# Yaw (Y axis): stick right (_yaw_input > 0) should rotate clockwise (turn right).
-	#   Positive Y rotation = counterclockwise from above, so negate for right turn.
-	var torque_vec: Vector3 = Vector3(
-		_pitch_input * pitch_torque,
-		-_yaw_input * yaw_torque,
-		-_roll_input * roll_torque
+func _apply_torque(delta: float) -> void:
+	if _current_mode == null:
+		return
+	var torque_vec: Vector3 = _current_mode.compute_torque(
+		_pitch_input,
+		_roll_input,
+		_yaw_input,
+		global_transform.basis,
+		angular_velocity,
+		delta
 	)
 	# Convert local torque to world-space and apply
 	apply_torque(global_transform.basis * torque_vec)
@@ -125,6 +123,7 @@ func _update_camera_rig() -> void:
 
 func _toggle_flight_mode() -> void:
 	_flight_mode = "acro" if _flight_mode == "stabilized" else "stabilized"
+	_current_mode = _flight_modes[_flight_mode]
 	flight_mode_changed.emit(_flight_mode)
 	print("[Drone] Flight mode: ", _flight_mode)
 

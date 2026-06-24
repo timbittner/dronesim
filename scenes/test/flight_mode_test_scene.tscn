@@ -1,0 +1,30 @@
+[gd_scene format=3 uid="uid://c6yrhp62mbsfq"]
+
+[ext_resource type="PackedScene" uid="uid://5jri1ism1wee" path="res://scenes/drone/drone.tscn" id="1_drone_scene"]
+[ext_resource type="Script" path="res://scripts/test/flight_mode_test.gd" id="2_test_script"]
+
+[sub_resource type="BoxMesh" id="BoxMesh_ground"]
+size = Vector3(10, 0.1, 10)
+
+[sub_resource type="BoxShape3D" id="BoxShape_ground"]
+size = Vector3(10, 0.1, 10)
+
+[node name="FlightModeTest" type="Node3D"]
+script = ExtResource("2_test_script")
+
+[node name="Ground" type="StaticBody3D" parent="."]
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="Ground"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.05, 0)
+mesh = SubResource("BoxMesh_ground")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Ground"]
+shape = SubResource("BoxShape_ground")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.86601907, 0.25000688, -0.43302146, 0, 0.86602384, 0.50000274, 0.500011, -0.43301192, 0.74999315, 10, 15, 10)
+light_energy = 1.2
+shadow_enabled = true
+
+[node name="Drone" parent="." instance=ExtResource("1_drone_scene")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0)

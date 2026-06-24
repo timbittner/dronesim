@@ -1,9 +1,9 @@
-[gd_scene load_steps=7 format=3 uid="uid://68fsb81da54v"]
+[gd_scene format=3 uid="uid://68fsb81da54v"]
 
-[ext_resource type="PackedScene" path="res://scenes/drone/drone.tscn" id="1_drone_scene"]
-[ext_resource type="Script" path="res://scripts/camera/chase_camera.gd" id="2_chase_cam"]
+[ext_resource type="PackedScene" uid="uid://5jri1ism1wee" path="res://scenes/drone/drone.tscn" id="1_drone_scene"]
+[ext_resource type="Script" uid="uid://drcgnp0heelc5" path="res://scripts/camera/chase_camera.gd" id="2_chase_cam"]
 [ext_resource type="PackedScene" path="res://scenes/environment/terrain.tscn" id="3_terrain"]
-[ext_resource type="Script" path="res://scripts/ui/debug_hud.gd" id="4_debug_hud"]
+[ext_resource type="Script" uid="uid://c6kocm2px6681" path="res://scripts/ui/debug_hud.gd" id="4_debug_hud"]
 
 [sub_resource type="BoxMesh" id="BoxMesh_pad"]
 size = Vector3(2, 0.1, 2)
@@ -25,15 +25,15 @@ fog_density = 0.005
 
 [node name="Main" type="Node3D" unique_id=1501016617]
 
-[node name="Terrain" parent="." instance=ExtResource("3_terrain")]
+[node name="Terrain" parent="." unique_id=2115880643 instance=ExtResource("3_terrain")]
 
 [node name="SpawnPad" type="MeshInstance3D" parent="." unique_id=611654983]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.05, 0)
 mesh = SubResource("BoxMesh_pad")
 
-[node name="SpawnPadCollision" type="StaticBody3D" parent="SpawnPad"]
+[node name="SpawnPadCollision" type="StaticBody3D" parent="SpawnPad" unique_id=2129473161]
 
-[node name="CollisionShape3D" type="CollisionShape3D" parent="SpawnPad/SpawnPadCollision"]
+[node name="CollisionShape3D" type="CollisionShape3D" parent="SpawnPad/SpawnPadCollision" unique_id=587239716]
 shape = SubResource("BoxShape_spawn_pad")
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=1384618151]
@@ -45,12 +45,12 @@ shadow_enabled = true
 environment = SubResource("Env_sky")
 
 [node name="Drone" parent="." unique_id=608845008 instance=ExtResource("1_drone_scene")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0)
 
 [node name="ChaseCamera" type="Camera3D" parent="." unique_id=171786846]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2, -4)
 script = ExtResource("2_chase_cam")
 target_path = NodePath("../Drone")
 
-[node name="DebugHUD" type="CanvasLayer" parent="."]
+[node name="DebugHUD" type="CanvasLayer" parent="." unique_id=1958239024]
 script = ExtResource("4_debug_hud")
-drone_path = NodePath("../Drone")
