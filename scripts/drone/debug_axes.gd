@@ -1,27 +1,25 @@
+@tool
 class_name DebugAxes
 extends Node3D
 
 ## Draws colored axis vectors on the drone to visualize orientation.
 ## Red   = +X (right)
 ## Green = +Y (up)
-## Blue  = -Z (forward)
+## Blue  = +Z (positive Z direction)
 ##
-## Uses three MeshInstance3D nodes with thin boxes, updated every _process
-## frame to follow the parent drone's orientation (though since this is a
-## child of the drone, the local axes are inherently correct — we just need
-## the meshes to exist in local space).
+## Uses three MeshInstance3D nodes with thin boxes.
 
 @export var axis_length: float = 0.2
 @export var axis_thickness: float = 0.008
 
-var _x_axis: MeshInstance3D  # Red   - right
-var _y_axis: MeshInstance3D  # Green - up
-var _z_axis: MeshInstance3D  # Blue  - forward (-Z)
+var _x_axis: MeshInstance3D  # Red   - right (+X)
+var _y_axis: MeshInstance3D  # Green - up (+Y)
+var _z_axis: MeshInstance3D  # Blue  - +Z
 
 func _ready() -> void:
 	_x_axis = _create_axis_box("X_Axis", Color.RED, Vector3.RIGHT)
 	_y_axis = _create_axis_box("Y_Axis", Color.GREEN, Vector3.UP)
-	_z_axis = _create_axis_box("Z_Axis", Color.BLUE, Vector3.FORWARD)  # Vector3.FORWARD = (0,0,-1) = forward
+	_z_axis = _create_axis_box("Z_Axis", Color.BLUE, Vector3.BACK)  # Vector3.BACK = (0,0,1) = +Z
 
 func _create_axis_box(node_name: String, color: Color, direction: Vector3) -> MeshInstance3D:
 	var mi := MeshInstance3D.new()

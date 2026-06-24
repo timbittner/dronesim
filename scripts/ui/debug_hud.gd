@@ -147,7 +147,7 @@ func _build_ui() -> void:
 	_gizmo_panel = ColorRect.new()
 	_gizmo_panel.color = Color(0.0, 0.0, 0.0, 0.65)
 	_gizmo_panel.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	_gizmo_panel.offset_left = -130.0
+	_gizmo_panel.offset_left = -170.0
 	_gizmo_panel.offset_top = 8.0
 	_gizmo_panel.offset_right = -8.0
 	_gizmo_panel.offset_bottom = 110.0
@@ -187,7 +187,7 @@ func _on_gizmo_draw() -> void:
 	var axes := {
 		"X": Vector3.RIGHT,
 		"Y": Vector3.UP,
-		"Z": Vector3.FORWARD,
+		"Z": Vector3.BACK,
 	}
 	var colors := {
 		"X": Color(1.0, 0.25, 0.25),
