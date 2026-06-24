@@ -19,7 +19,7 @@ var _flight_modes: Dictionary = {}
 var _current_mode: FlightModeBase = null
 
 # --- Angular damping (simulates air resistance on rotors) ---
-@export var angular_damping_factor: float = 3.0
+@export var angular_damping_factor: float = 0.5
 
 # --- State ---
 var _throttle_input: float = 0.0  # -1..1
