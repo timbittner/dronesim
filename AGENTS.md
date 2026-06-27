@@ -95,8 +95,8 @@ _apply_angular_damping()  ← per-axis damping
 | Left | Left/Right | Yaw (rotate) |
 | Right | Up/Down | Pitch (forward/back) |
 | Right | Left/Right | Roll (tilt left/right) |
-| L1/R1 | Toggle | Switch flight mode |
-| R2 | Hold | Toggle FPV camera |
+| L1 | Press | Switch flight mode |
+| R1 | Hold | Toggle FPV camera |
 
 ## Known Issues
 

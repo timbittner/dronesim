@@ -151,7 +151,7 @@ Toggle with L1/R1.
 | pitch_forward / pitch_backward | Right stick Y | Up / Down |
 | roll_left / roll_right | Right stick X | Left / Right |
 | toggle_flight_mode | L1 (button 9) | M |
-| toggle_fpv | R2 (button 10) | C |
+| toggle_fpv | R1 (button 10) | C |
 | reset_drone | Triangle (button 3) | R |
 
 Mode 2 layout: left stick = throttle + yaw, right stick = pitch + roll.

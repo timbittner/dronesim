@@ -34,6 +34,14 @@ var _spawn_transform: Transform3D
 
 var _flight_mode: String = "stabilized"
 
+# --- Rotor visual ---
+var _rotor_nodes: Array[MeshInstance3D] = []
+var _rotor_idle_meshes: Array[Mesh] = []
+var _rotor_idle_materials: Array[Material] = []
+var _rotor_spin_mesh: Mesh
+var _rotor_spin_material: Material
+var _armed: bool = false
+
 # Rotor positions in local body frame.
 var _rotor_positions: Array[Vector3] = [
 	Vector3(-0.25, 0.07,  0.25),  # FL — left-rear
@@ -61,6 +69,33 @@ func _ready() -> void:
 	_flight_modes["stabilized"] = stabilized
 
 	_current_mode = _flight_modes[_flight_mode]
+
+	_setup_rotor_visuals()
+
+
+func _setup_rotor_visuals() -> void:
+	# Collect rotor MeshInstance3D children and snapshot their idle state.
+	for child in get_children():
+		if child is MeshInstance3D and child.name.begins_with("Rotor"):
+			_rotor_nodes.append(child)
+			_rotor_idle_meshes.append(child.mesh)
+			_rotor_idle_materials.append(child.material_override)
+
+	# Create spinning disc mesh — flat disc, same diameter as cone base.
+	var disc := CylinderMesh.new()
+	disc.top_radius = 0.08
+	disc.bottom_radius = 0.08
+	disc.height = 0.01
+	_rotor_spin_mesh = disc
+
+	# Translucent material with subtle emission for spinning rotors.
+	var spin_mat := StandardMaterial3D.new()
+	spin_mat.albedo_color = Color(0.35, 0.5, 0.5, 0.35)
+	spin_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	spin_mat.emission_enabled = true
+	spin_mat.emission = Color(0.2, 0.3, 0.35)
+	spin_mat.emission_energy_multiplier = 0.4
+	_rotor_spin_material = spin_mat
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -95,6 +130,18 @@ func _compute_and_apply_forces(delta: float) -> void:
 	)
 
 	var mix := _mix_rotors(control.collective, control.pitch_diff, control.roll_diff)
+
+	# Rotor visual: swap between cone (idle) and disc (spinning) based on throttle cut.
+	var armed := control.collective >= 0.001
+	if armed != _armed:
+		_armed = armed
+		for i in _rotor_nodes.size():
+			if _armed:
+				_rotor_nodes[i].mesh = _rotor_spin_mesh
+				_rotor_nodes[i].material_override = _rotor_spin_material
+			else:
+				_rotor_nodes[i].mesh = _rotor_idle_meshes[i]
+				_rotor_nodes[i].material_override = _rotor_idle_materials[i]
 
 	var up: Vector3 = global_transform.basis.y
 	var throttles: Array[float] = [mix.fl, mix.fr, mix.bl, mix.br]

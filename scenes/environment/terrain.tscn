@@ -1,6 +1,10 @@
 [gd_scene load_steps=2 format=3]
 
 [ext_resource type="Script" path="res://scripts/environment/terrain_generator.gd" id="1_terrain_gen"]
+[ext_resource type="Script" path="res://scripts/environment/scatter.gd" id="2_scatter"]
 
 [node name="Terrain" type="Node3D"]
 script = ExtResource("1_terrain_gen")
+
+[node name="Scatter" type="Node3D" parent="."]
+script = ExtResource("2_scatter")

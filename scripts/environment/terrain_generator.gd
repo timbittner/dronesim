@@ -52,18 +52,44 @@ func get_height(x: float, z: float) -> float:
 	return raw_height
 
 
-func _get_color(height: float) -> Color:
+## Estimates slope steepness (0.0 = flat, 1.0 = 45°+) by sampling neighbors.
+func _get_slope(x: float, z: float, step: float = 1.0) -> float:
+	var _h_center := get_height(x, z)
+	var h_n := get_height(x, z - step)
+	var h_s := get_height(x, z + step)
+	var h_e := get_height(x + step, z)
+	var h_w := get_height(x - step, z)
+	var dx := (h_e - h_w) / (2.0 * step)
+	var dz := (h_s - h_n) / (2.0 * step)
+	var angle := atan(sqrt(dx * dx + dz * dz))
+	# Normalize: tan(0) = 0, tan(~45°) ≈ 1
+	return clampf(angle / (PI / 4.0), 0.0, 1.0)
+
+
+func _get_color(height: float, slope: float = 0.0) -> Color:
 	var normalized := (height + height_scale) / (2.0 * height_scale)
 	normalized = clamp(normalized, 0.0, 1.0)
+
+	# Base color from height
+	var base_color: Color
 	if normalized < 0.35:
-		return Color(0.20, 0.35, 0.15)  # Low — dark green
-	if normalized < 0.50:
-		return Color(0.30, 0.50, 0.20)  # Mid-low — green
-	if normalized < 0.65:
-		return Color(0.45, 0.35, 0.20)  # Hills — brown
-	if normalized < 0.80:
-		return Color(0.50, 0.45, 0.40)  # Upper slopes — gray-brown
-	return Color(0.70, 0.70, 0.68)      # Peaks — light gray
+		base_color = Color(0.20, 0.35, 0.15)  # Low — dark green
+	elif normalized < 0.50:
+		base_color = Color(0.30, 0.50, 0.20)  # Mid-low — green
+	elif normalized < 0.65:
+		base_color = Color(0.45, 0.35, 0.20)  # Hills — brown
+	elif normalized < 0.80:
+		base_color = Color(0.50, 0.45, 0.40)  # Upper slopes — gray-brown
+	else:
+		base_color = Color(0.70, 0.70, 0.68)  # Peaks — light gray
+
+	# Blend toward rock color on steep slopes
+	if slope > 0.3:
+		var rock_color := Color(0.55, 0.52, 0.48)  # light grey rock
+		var blend := clampf((slope - 0.3) / 0.4, 0.0, 1.0)
+		base_color = base_color.lerp(rock_color, blend)
+
+	return base_color
 
 
 func _build_mesh() -> void:
@@ -84,7 +110,8 @@ func _build_mesh() -> void:
 			var x := -half_size + xi * step
 			var z := -half_size + zi * step
 			var h := get_height(x, z)
-			st.set_color(_get_color(h))
+			var slope := _get_slope(x, z, step)
+			st.set_color(_get_color(h, slope))
 			st.add_vertex(Vector3(x, h, z))
 
 	# Build triangle indices (CCW winding so normals face +Y)
