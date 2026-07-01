@@ -118,6 +118,13 @@ Run: `godot --headless --path . scenes/test/flight_mode_test_scene.tscn`
 
 ---
 
+## Coordinate System
+
+Godot right-handed, Y-up: **forward (nose) = −Z**, right = +X, up = +Y. Rotors
+are quad-X, named by physical position: **FL/FR at the nose (−Z)**, BL/BR at the
+tail (+Z). The full canonical table (with the mixer sign rationale) lives in
+**AGENTS.md → "Coordinate System"** — treat that as the single source of truth.
+
 ## Flight Model
 
 **Per-rotor thrust vectoring** (current):

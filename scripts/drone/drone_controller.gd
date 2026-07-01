@@ -42,12 +42,14 @@ var _rotor_spin_mesh: Mesh
 var _rotor_spin_material: Material
 var _armed: bool = false
 
-# Rotor positions in local body frame.
+# Rotor positions in local body frame. Order is [FL, FR, BL, BR] and MUST match
+# the mixer output order. Forward (nose) = −Z, right = +X. See AGENTS.md
+# "Coordinate System" — this array is the ground truth the names describe.
 var _rotor_positions: Array[Vector3] = [
-	Vector3(-0.25, 0.07,  0.25),  # FL — left-rear
-	Vector3( 0.25, 0.07,  0.25),  # FR — right-rear
-	Vector3(-0.25, 0.07, -0.25),  # BL — left-front
-	Vector3( 0.25, 0.07, -0.25),  # BR — right-front
+	Vector3(-0.25, 0.07, -0.25),  # FL — front-left  (nose = −Z, left = −X)
+	Vector3( 0.25, 0.07, -0.25),  # FR — front-right
+	Vector3(-0.25, 0.07,  0.25),  # BL — back-left   (tail = +Z)
+	Vector3( 0.25, 0.07,  0.25),  # BR — back-right
 ]
 
 
@@ -182,10 +184,13 @@ static func _mix_rotors(collective: float, pitch: float, roll: float) -> FlightM
 		clipped_roll *= clip_scale
 
 	var result := FlightModeBase.RotorMix.new()
-	result.fl = collective - clipped_pitch + clipped_roll
-	result.fr = collective - clipped_pitch - clipped_roll
-	result.bl = collective + clipped_pitch + clipped_roll
-	result.br = collective + clipped_pitch - clipped_roll
+	# FL/FR are at the nose (−Z), BL/BR at the tail (+Z); FL/BL are on the left
+	# (−X). Positive pitch = nose up → front rotors get more thrust. Positive
+	# roll = roll right → left rotors get more thrust. (See AGENTS.md.)
+	result.fl = collective + clipped_pitch + clipped_roll
+	result.fr = collective + clipped_pitch - clipped_roll
+	result.bl = collective - clipped_pitch + clipped_roll
+	result.br = collective - clipped_pitch - clipped_roll
 	# Final clamp: MIN_ROTOR only applies when collective is on (throttle not cut)
 	result.fl = clampf(result.fl, MIN_ROTOR, 1.0)
 	result.fr = clampf(result.fr, MIN_ROTOR, 1.0)

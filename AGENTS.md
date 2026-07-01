@@ -79,6 +79,54 @@ _apply_angular_damping()  ← per-axis damping
 - **Input:** Always use `Input.get_action_strength` for analog sticks
 - **Commits:** Conventional Commits (`feat:`, `fix:`, `refactor:`, `docs:`, `chore:`)
 
+## Coordinate System (CANONICAL — read this before touching rotors, pitch, or roll)
+
+Godot is **right-handed, Y-up**. This is the single source of truth. Do not
+re-derive it from the code — the code conforms to this, not the other way around.
+
+| Direction        | Local axis | Notes                          |
+|------------------|-----------|---------------------------------|
+| Right            | **+X**    | Left = −X                       |
+| Up               | **+Y**    | Down = −Y                       |
+| **Forward (nose)** | **−Z**  | **Back / tail = +Z**            |
+
+Debug gizmo (`debug_axes.gd`): red = +X (right), green = +Y (up), blue = +Z
+(**back**). The nose points **away** from the blue arrow.
+
+Blender → Godot import: Blender is Z-up (forward = −Y, up = +Z). Godot's importer
+rotates −90° about X, so Blender −Y → Godot −Z (forward) and Blender +Z → Godot
++Y (up). Model the nose toward Blender −Y and it lands on Godot −Z.
+
+### Rotor / arm layout (positions are ground truth; names follow positions)
+
+Quad-X. Looking from above, nose up the page:
+
+```
+        nose (−Z)
+     FL o       o FR      FL/FR = front = teal
+        \       /
+         \     /
+          drone            +X → (right)
+         /     \
+        /       \
+     BL o       o BR      BL/BR = back  = pink
+        tail (+Z)
+```
+
+| Rotor | Local position (x, y, z) | Color |
+|-------|--------------------------|-------|
+| FL    | (−0.25, 0.07, **−0.25**) | teal  |
+| FR    | (+0.25, 0.07, **−0.25**) | teal  |
+| BL    | (−0.25, 0.07, **+0.25**) | pink  |
+| BR    | (+0.25, 0.07, **+0.25**) | pink  |
+
+Mixer signs (`drone_controller.gd::_mix_rotors`) follow directly:
+- **Pitch:** positive = nose up → **front** rotors (FL, FR) get *more* thrust.
+- **Roll:** positive = roll right → **left** rotors (FL, BL) get *more* thrust.
+
+The `_rotor_positions` array order is `[FL, FR, BL, BR]` and the mixer output
+`[fl, fr, bl, br]` maps to it index-for-index. Keep those two in the same order.
+
 ## Development
 
 - Godot editor must be open when using MCP tools (auto-import on file changes)
