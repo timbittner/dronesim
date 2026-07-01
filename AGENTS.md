@@ -7,9 +7,9 @@ vibe-coding playground with the intent to iterate into a drone swarm simulator
 with realistic flight physics, autonomous routing, weather, and threat simulation.
 
 **Current phase:** Per-rotor thrust vectoring complete, plus assisted flight
-modes (altitude hold + brake). Both acro and stabilized modes use individual
-rotor forces applied at each arm position. See `PROJECT_SUMMARY.md` for
-detailed architecture and tuning parameters.
+modes (altitude hold + brake) and crash / signal loss (P2 Phase C). Both acro
+and stabilized modes use individual rotor forces applied at each arm position.
+See `PROJECT_SUMMARY.md` for detailed architecture and tuning parameters.
 
 ## Tech Stack
 
@@ -34,11 +34,13 @@ scenes/
     flight_mode_test_scene.tscn
 scripts/
   drone/
-    drone_controller.gd          Core controller — input, mixer, damping
+    drone_controller.gd          Core controller — input, mixer, damping,
+                                 crash detection + FLYING/CRASHED state
     flight_mode_base.gd          Abstract base — FlightControl, RotorMix
     flight_mode_acro.gd          Direct differential mapping
     flight_mode_stabilized.gd    PD auto-level + rate mode
     flight_mode_altitude_hold.gd Post-compute collective filter (not a mode)
+    brake_assist.gd              Rotor-thrust tilt brake (assist, not a mode)
     drone_body_mesh.gd           Procedural rhombic body (RETIRED — superseded
                                  by drone_body.glb; kept for reference only)
     debug_axes.gd                RGB orientation arrows
@@ -49,7 +51,7 @@ scripts/
   ui/
     debug_hud.gd                 Telemetry overlay
   test/
-    flight_mode_test.gd          10 headless tests
+    flight_mode_test.gd          15 headless tests
 assets/
   materials/
   models/
@@ -87,6 +89,31 @@ apply_force() at 4 rotor positions + apply_torque() for yaw
        ↓
 _apply_angular_damping()  ← per-axis damping
 ```
+
+### Crash / signal loss (P2 Phase C)
+
+`DroneController` has two states: `FLYING` and `CRASHED`. Detection lives in
+`_integrate_forces` — not the `body_entered` signal, which carries no contact
+normal (contact reporting needs `contact_monitor = true` +
+`max_contacts_reported = 4` on the RigidBody3D, set in `drone.tscn` along with
+`continuous_cd = true` — without CCD the thin drone body tunnels through
+geometry above ~10 m/s, which fast dives easily exceed). A contact
+crashes only if impact momentum exceeds `crash_momentum_threshold` (8 kg·m/s
+≈ 4 m/s; the spawn free-fall onto the pad arrives at ~6.1, which must bounce)
+**and** the hit is direct (−velocity within `crash_max_impact_angle_deg` = 60°
+of the contact normal); anything slower or more grazing just bounces. The
+impact velocity is `_prev_velocity` (cached each physics tick) because the
+solver has already absorbed the impact from `linear_velocity` by the time the
+contact is reported.
+
+On crash the "signal" is lost: rotor forces stop (physics tumbles the airframe
+naturally — no magic forces), inputs are ignored except **Triangle** (reset)
+and **R1** (camera toggle — the camera belongs to the pilot, not the dead
+drone; L1 mode toggle is ignored). The HUD shows a pulsing SIGNAL LOST banner.
+The FPV *feed* dies at the crash instant: crash in FPV → the last rendered
+frame stays frozen on screen; crash in 3PV → no frame was captured, so
+switching to FPV shows a black "no signal" screen. Chase cam always renders
+live. Reset restores everything.
 
 ### Extension Points
 
@@ -173,7 +200,10 @@ The `_rotor_positions` array order is `[FL, FR, BL, BR]` and the mixer output
 | R1 | Press | Toggle FPV camera |
 | L2 | Hold (analog) | Altitude hold — replaces collective with a PD hover hold; pitch/roll/yaw pass through |
 | R2 | Hold (analog) | Brake — tilts the airframe via rotor thrust to oppose horizontal velocity (adds to, doesn't override, pitch/roll from stick/mode); composes with altitude hold (brake = horizontal, altitude hold = vertical) |
-| Triangle | Press | Reset drone |
+| Triangle | Press | Reset drone (also recovers from a crash / SIGNAL LOST) |
+
+While CRASHED only Triangle (reset) and R1 (camera toggle) are handled — L1 and
+all stick input are dead until reset.
 
 Keyboard fallback: Shift = altitude_hold, Ctrl = brake_mode (see other actions'
 keyboard bindings in `project.godot`).

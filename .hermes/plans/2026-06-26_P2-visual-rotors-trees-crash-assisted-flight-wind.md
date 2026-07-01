@@ -236,7 +236,37 @@ Add to telemetry display:
 
 ---
 
-## Phase C — Crash / Signal Loss
+## Phase C — Crash / Signal Loss — ✅ DONE
+
+Landed with two deliberate deviations from the text below, agreed with Tim:
+
+- **Detection uses `_integrate_forces`, not `body_entered`:** the signal
+  carries no contact normal, which the impact-angle check needs. With
+  `contact_monitor = true` + `max_contacts_reported = 4` (the setup gap
+  flagged in C-1, now set in `drone.tscn`), the same contacts are available
+  with normals via `PhysicsDirectBodyState3D`. Impact velocity is the
+  previous tick's `linear_velocity` (cached), since the solver has already
+  absorbed the impact by contact-report time.
+- **FPV "frozen last frame" on signal loss** (Tim's idea, this session):
+  physics keeps rolling after a crash as planned, but the FPV *feed* dies at
+  the crash instant. Crash in FPV → last rendered frame is captured and
+  frozen fullscreen; crash in 3PV → no frame was captured, so entering FPV
+  afterwards shows a black "no signal" screen. Chase cam always renders
+  live. This relaxes "only reset_drone is handled while CRASHED" to reset
+  **+ toggle_fpv** (the camera is the pilot's, not the drone's); L1 stays
+  ignored.
+
+Two tuning findings from verification runs:
+- `crash_momentum_threshold` is **8** kg·m/s, not the ~6 suggested below: the
+  game-start free-fall from the spawn point onto the pad arrives at ~6.1, and
+  crashed the drone on launch at 6.0.
+- `continuous_cd = true` added to `drone.tscn`: without CCD the 0.12m-thin
+  drone body tunnels straight through thin geometry above ~10 m/s (found when
+  the crash test's 12 m/s drop passed through the test ground plane), and fast
+  dives exceed that easily.
+
+3 new headless tests (15 total): hard impact crashes, gentle acro touchdown
+doesn't, reset clears CRASHED and returns to spawn.
 
 ### C-1 Collision detection using existing physics
 
@@ -433,13 +463,13 @@ color variation confirmed.
 7. ~~Phase B-2 (altitude hold)~~ — done
 8. ~~Phase B-3 (brake mode)~~ — done
 9. ~~Phase B-4 (HUD indicators)~~ — done
-10. Phase C-1 + C-2 (crash detection + state machine) — 25 min
-11. Phase C-3 (signal lost HUD) — 15 min
+10. ~~Phase C-1 + C-2 (crash detection + state machine)~~ — done
+11. ~~Phase C-3 (signal lost HUD + frozen FPV feed)~~ — done
 12. Phase D-1 (wind system) — 25 min
 13. Phase D-2 (wind viz) — 20 min
 14. Phase D-3 (altitude wind) — 10 min
 
-Estimated remaining: ~1.5h of focused work (Phases C–D).
+Estimated remaining: ~1h of focused work (Phase D).
 
 ---
 

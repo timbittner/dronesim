@@ -95,6 +95,11 @@ func _run_all_tests() -> void:
 	await _run_test("test_altitude_hold_maintains_altitude")
 	await _run_test("test_brake_kills_horizontal_velocity")
 
+	# Crash / signal loss (Phase C)
+	await _run_test("test_crash_on_hard_impact")
+	await _run_test("test_gentle_landing_no_crash")
+	await _run_test("test_reset_clears_crash")
+
 	var total := _passed + _failed
 	print("[TEST] ========================================")
 	print("[TEST] Results: ", _passed, " passed, ", _failed, " failed out of ", total)
@@ -440,4 +445,81 @@ func test_brake_kills_horizontal_velocity() -> bool:
 
 	var passed: bool = final_horiz < initial_horiz * 0.5
 	print("[TEST] ", "PASS" if passed else "FAIL", " — final_horiz=", final_horiz, " m/s (expected < 50% of initial after ~3s of tilt-braking)")
+	return passed
+
+
+# ---------------------------------------------------------------------------
+# Test: Hard vertical impact into the ground triggers a crash
+# ---------------------------------------------------------------------------
+func test_crash_on_hard_impact() -> bool:
+	print("[TEST] --- test_crash_on_hard_impact ---")
+	_reset_drone()
+
+	# Drop hard onto the test ground plane (top at y=0). Commanded -12 m/s
+	# arrives at ~9 m/s after linear damping — ~18 kg·m/s, well above the
+	# crash_momentum_threshold of 8.
+	_drone.global_position = Vector3(0.0, 5.0, 0.0)
+	_drone.linear_velocity = Vector3(0.0, -12.0, 0.0)
+
+	await _run_ticks(90)  # impact after ~0.6s at -8 m/s
+
+	var crashed: bool = _drone.is_crashed()
+	print("[TEST] Crashed: ", crashed, " pos: ", _drone.global_position)
+
+	var passed: bool = crashed
+	print("[TEST] ", "PASS" if passed else "FAIL", " — expected CRASHED after hard vertical impact")
+	return passed
+
+
+# ---------------------------------------------------------------------------
+# Test: Gentle landing does NOT trigger a crash
+# ---------------------------------------------------------------------------
+func test_gentle_landing_no_crash() -> bool:
+	print("[TEST] --- test_gentle_landing_no_crash ---")
+	_reset_drone()
+	# Acro with zero throttle = rotors cut, so the drone genuinely settles onto
+	# the ground (stabilized would hover-hold and never make contact).
+	_set_acro_mode()
+
+	# Short free-fall: touches down at ~1.7 m/s → momentum ~3.5, below the
+	# crash threshold of 8.
+	_drone.global_position = Vector3(0.0, 0.2, 0.0)
+	_drone.linear_velocity = Vector3(0.0, -0.5, 0.0)
+
+	await _run_ticks(120)  # touch down, bounce, settle
+
+	var crashed: bool = _drone.is_crashed()
+	print("[TEST] Crashed: ", crashed, " pos: ", _drone.global_position)
+
+	var passed: bool = not crashed
+	print("[TEST] ", "PASS" if passed else "FAIL", " — expected NO crash from a ~1.7 m/s touchdown")
+	return passed
+
+
+# ---------------------------------------------------------------------------
+# Test: reset() clears the CRASHED state and returns to spawn
+# ---------------------------------------------------------------------------
+func test_reset_clears_crash() -> bool:
+	print("[TEST] --- test_reset_clears_crash ---")
+	_reset_drone()
+
+	# Crash first (same setup as test_crash_on_hard_impact)
+	_drone.global_position = Vector3(0.0, 5.0, 0.0)
+	_drone.linear_velocity = Vector3(0.0, -12.0, 0.0)
+	await _run_ticks(90)
+	if not _drone.is_crashed():
+		print("[TEST] FAIL — precondition: drone did not crash")
+		return false
+
+	_drone.reset()
+	await _run_ticks(5)
+
+	var crashed: bool = _drone.is_crashed()
+	var pos: Vector3 = _drone.global_position
+	print("[TEST] Crashed after reset: ", crashed, " pos: ", pos)
+
+	# Spawn is at y=1 in the test scene; stabilized (default mode) hover-holds
+	# near it, so a couple of ticks after reset the drone should be close.
+	var passed: bool = not crashed and pos.distance_to(Vector3(0.0, 1.0, 0.0)) < 1.0
+	print("[TEST] ", "PASS" if passed else "FAIL", " — expected FLYING near spawn after reset")
 	return passed

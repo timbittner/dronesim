@@ -16,6 +16,18 @@ var _frame_count: int = 0
 var _label: Label
 var _bg: ColorRect
 
+# Crash / signal-loss overlay.
+# The FPV feed dies at the crash instant: if the crash happens while in FPV the
+# last rendered frame is captured and frozen on screen; if it happens in 3PV no
+# frame was ever captured, so entering FPV afterwards shows the plain black
+# "no signal" screen. Chase cam always renders live (only the banner shows).
+var _feed_black: ColorRect          # black "no signal" backdrop
+var _feed_frozen: TextureRect       # frozen last frame (only if crashed in FPV)
+var _signal_lost_label: Label
+var _frozen_frame: ImageTexture = null
+var _pulse_time: float = 0.0
+var _drone_connected: bool = false
+
 # Axis gizmo + coords (bottom-left)
 var _gizmo_panel: ColorRect
 var _gizmo_canvas: Control
@@ -31,13 +43,25 @@ func _ready() -> void:
 	_build_ui()
 	_gizmo_font = ThemeDB.fallback_font
 	_gizmo_font_size = ThemeDB.fallback_font_size
+	_connect_drone_signals()
 
 
-func _process(_delta: float) -> void:
+func _connect_drone_signals() -> void:
+	if _drone == null or _drone_connected:
+		return
+	_drone_connected = true
+	_drone.crash_detected.connect(_on_crash_detected)
+	_drone.fpv_toggled.connect(_on_fpv_toggled)
+
+
+func _process(delta: float) -> void:
 	if _drone == null:
 		_drone = get_node_or_null(drone_path) as DroneController
 		if _drone == null:
 			return
+		_connect_drone_signals()
+
+	_update_crash_overlay(delta)
 
 	var telemetry: Dictionary = _gather_telemetry()
 	_label.text = _format_telemetry(telemetry)
@@ -53,6 +77,50 @@ func _process(_delta: float) -> void:
 	if _frame_count >= print_interval:
 		_frame_count = 0
 		print("[HUD] %s" % _format_telemetry_compact(telemetry))
+
+
+# ---------------------------------------------------------------------------
+# Crash / signal-loss overlay
+# ---------------------------------------------------------------------------
+
+func _on_crash_detected() -> void:
+	# The feed is only being watched (and thus freezable) if the pilot was in
+	# FPV at the crash instant. The viewport still holds the last presented
+	# frame at this point — that's exactly the "last frame before signal loss".
+	if _drone.is_fpv_enabled():
+		var img: Image = get_viewport().get_texture().get_image()
+		_frozen_frame = ImageTexture.create_from_image(img)
+		_feed_frozen.texture = _frozen_frame
+	_pulse_time = 0.0
+	_signal_lost_label.visible = true
+	_label.modulate.a = 0.35
+	_update_dead_feed_visibility()
+
+
+func _on_fpv_toggled(_enabled: bool) -> void:
+	_update_dead_feed_visibility()
+
+
+## The dead-feed layer covers the 3D view whenever the pilot looks through the
+## (dead) FPV camera of a crashed drone: frozen frame if one was captured at
+## crash time, plain black "no signal" otherwise. Chase cam stays live.
+func _update_dead_feed_visibility() -> void:
+	var dead_feed: bool = _drone != null and _drone.is_crashed() and _drone.is_fpv_enabled()
+	_feed_black.visible = dead_feed
+	_feed_frozen.visible = dead_feed and _frozen_frame != null
+
+
+func _update_crash_overlay(delta: float) -> void:
+	if _drone.is_crashed():
+		_pulse_time += delta
+		_signal_lost_label.modulate.a = 0.6 + 0.4 * sin(_pulse_time * 6.0)
+	elif _signal_lost_label.visible:
+		# Drone was reset — restore the live HUD and drop the captured frame.
+		_signal_lost_label.visible = false
+		_frozen_frame = null
+		_feed_frozen.texture = null
+		_label.modulate.a = 1.0
+		_update_dead_feed_visibility()
 
 
 func _gather_telemetry() -> Dictionary:
@@ -84,6 +152,7 @@ func _gather_telemetry() -> Dictionary:
 		"fpv_enabled": _drone._fpv_enabled,
 		"altitude_hold_engaged": _drone._altitude_hold_engaged,
 		"brake_engaged": _drone._brake_engaged,
+		"crashed": _drone.is_crashed(),
 	}
 
 
@@ -115,9 +184,9 @@ func _format_telemetry(t: Dictionary) -> String:
 
 func _format_telemetry_compact(t: Dictionary) -> String:
 	return (
-		"mode=%s fpv=%s alt_hold=%s brake=%s thr=%.0f%% sticks=[p%+.2f r%+.2f y%+.2f t%+.2f] "
+		"mode=%s fpv=%s alt_hold=%s brake=%s crashed=%s thr=%.0f%% sticks=[p%+.2f r%+.2f y%+.2f t%+.2f] "
 		% [t["flight_mode"], t["fpv_enabled"], t["altitude_hold_engaged"], t["brake_engaged"],
-		   t["throttle_pct"], t["pitch_stick"], t["roll_stick"], t["yaw_stick"], t["throttle_stick"]]
+		   t["crashed"], t["throttle_pct"], t["pitch_stick"], t["roll_stick"], t["yaw_stick"], t["throttle_stick"]]
 		+ "H=%.1f° P=%.1f° R=%.1f° spd=%.1f alt=%.1f"
 		% [t["heading_deg"], t["pitch_deg"], t["roll_deg"],
 		   t["speed_mps"], t["altitude"]]
@@ -125,6 +194,20 @@ func _format_telemetry_compact(t: Dictionary) -> String:
 
 
 func _build_ui() -> void:
+	# ——— Dead-feed layer (added first = drawn under the telemetry panels) ———
+	_feed_black = ColorRect.new()
+	_feed_black.color = Color.BLACK
+	_feed_black.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_feed_black.visible = false
+	add_child(_feed_black)
+
+	_feed_frozen = TextureRect.new()
+	_feed_frozen.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_feed_frozen.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_feed_frozen.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	_feed_frozen.visible = false
+	add_child(_feed_frozen)
+
 	# ——— Top-left telemetry panel ———
 	_bg = ColorRect.new()
 	_bg.color = Color(0.0, 0.0, 0.0, 0.65)
@@ -177,6 +260,21 @@ func _build_ui() -> void:
 	_coord_label.add_theme_constant_override("outline_size", 1)
 	_coord_label.text = "X    0.00  Y    0.00  Z    0.00"
 	_gizmo_panel.add_child(_coord_label)
+
+	# ——— Centered SIGNAL LOST banner (added last = drawn on top) ———
+	_signal_lost_label = Label.new()
+	_signal_lost_label.text = "⚠ SIGNAL LOST"
+	_signal_lost_label.add_theme_font_size_override("font_size", 48)
+	_try_load_monospace_font(_signal_lost_label)
+	_signal_lost_label.add_theme_color_override("font_color", Color(1.0, 0.15, 0.1))
+	_signal_lost_label.add_theme_color_override("font_outline_color", Color(0, 0, 0))
+	_signal_lost_label.add_theme_constant_override("outline_size", 6)
+	_signal_lost_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_signal_lost_label.set_anchors_preset(Control.PRESET_CENTER)
+	_signal_lost_label.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	_signal_lost_label.grow_vertical = Control.GROW_DIRECTION_BOTH
+	_signal_lost_label.visible = false
+	add_child(_signal_lost_label)
 
 
 func _on_gizmo_draw() -> void:

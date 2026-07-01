@@ -8,6 +8,9 @@ size = Vector3(0.4, 0.12, 0.4)
 
 [node name="Drone" type="RigidBody3D" unique_id=81519865]
 mass = 2.0
+continuous_cd = true
+contact_monitor = true
+max_contacts_reported = 4
 script = ExtResource("1_drone_ctrl")
 
 [node name="Body" type="Node3D" parent="." unique_id=736570692]

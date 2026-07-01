@@ -8,9 +8,20 @@ extends RigidBody3D
 
 signal flight_mode_changed(mode_name: String)
 signal fpv_toggled(enabled: bool)
+signal crash_detected
 
 # --- Thrust ---
 @export var max_thrust: float = 17.5  # Newtons per rotor (35% of previous 50.0)
+
+# --- Crash detection ---
+## Impact momentum (kg·m/s) above which a direct hit counts as a crash.
+## 8.0 ≈ a 4 m/s impact at the default mass of 2.0 kg. The free-fall drop from
+## the spawn point onto the pad arrives at ~6.1 kg·m/s — the threshold must
+## stay above that or the drone crashes on game start.
+@export var crash_momentum_threshold: float = 8.0
+## Max angle between the (reversed) impact velocity and the contact normal for
+## the hit to count as "direct". Grazing contacts beyond this angle only bounce.
+@export var crash_max_impact_angle_deg: float = 60.0
 
 # Per-rotor hover throttle: (mass * gravity) / (4 * max_thrust)
 var hover_throttle: float = 0.0
@@ -32,12 +43,20 @@ var _flight_modes: Dictionary = {}
 var _current_mode: FlightModeBase = null
 
 # --- State ---
+enum State { FLYING, CRASHED }
+
+var _state: State = State.FLYING
 var _throttle_input: float = 0.0
 var _pitch_input: float = 0.0
 var _roll_input: float = 0.0
 var _yaw_input: float = 0.0
 var _fpv_enabled: bool = false
 var _spawn_transform: Transform3D
+
+## Velocity at the end of the previous physics tick. Used as the impact velocity
+## for crash detection — by the time a contact is reported, the solver has
+## already absorbed much of the impact from linear_velocity.
+var _prev_velocity: Vector3 = Vector3.ZERO
 
 var _flight_mode: String = "acro"
 
@@ -206,7 +225,9 @@ func _first_mesh_instance(node: Node) -> MeshInstance3D:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if event.is_action_pressed("toggle_flight_mode"):
+	# While CRASHED the signal is lost: only reset (Triangle) and the camera
+	# toggle (R1 — the camera belongs to the pilot, not the dead drone) work.
+	if event.is_action_pressed("toggle_flight_mode") and _state == State.FLYING:
 		_toggle_flight_mode()
 	if event.is_action_pressed("toggle_fpv"):
 		_toggle_fpv()
@@ -215,9 +236,14 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func _physics_process(delta: float) -> void:
-	_read_inputs()
-	_compute_and_apply_forces(delta)
-	_apply_angular_damping()
+	if _state == State.FLYING:
+		_read_inputs()
+		_compute_and_apply_forces(delta)
+		_apply_angular_damping()
+	# While CRASHED: no inputs, no rotor forces, no damping — gravity and
+	# inertia carry the airframe until it settles.
+
+	_prev_velocity = linear_velocity
 
 	# Fallback alongside the _unhandled_input edge trigger below: on some
 	# controller/OS combinations a quick tap doesn't cross the action's
@@ -227,6 +253,41 @@ func _physics_process(delta: float) -> void:
 	# reset() is idempotent, so double-firing in the same frame is harmless.
 	if Input.is_action_just_pressed("reset_drone"):
 		reset()
+
+
+func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
+	# Crash detection. Contacts require contact_monitor = true and
+	# max_contacts_reported > 0 on the RigidBody3D (set in drone.tscn).
+	if _state == State.CRASHED or state.get_contact_count() == 0:
+		return
+	# Zero-velocity guard: resting contact (e.g. sitting on the spawn pad)
+	# has no meaningful impact velocity — normalized() would be undefined.
+	if _prev_velocity.length() < 0.05:
+		return
+	var momentum: float = _prev_velocity.length() * mass
+	# Contact normal points away from the surface, toward this body, so a
+	# head-on impact has velocity anti-parallel to it: alignment = 1.0.
+	var normal: Vector3 = state.get_contact_local_normal(0)
+	var alignment: float = -_prev_velocity.normalized().dot(normal)
+	# Crash needs momentum high AND the hit direct; a slow or grazing contact
+	# is just a bounce.
+	if momentum > crash_momentum_threshold \
+			and alignment > cos(deg_to_rad(crash_max_impact_angle_deg)):
+		_crash(momentum)
+
+
+func _crash(momentum: float) -> void:
+	_state = State.CRASHED
+	_throttle_input = 0.0
+	_pitch_input = 0.0
+	_roll_input = 0.0
+	_yaw_input = 0.0
+	_altitude_hold_engaged = false
+	_brake_engaged = false
+	thrust_percent = 0.0
+	_set_armed(false)  # motors dead — props stop
+	crash_detected.emit()
+	print("[Drone] CRASH — signal lost (impact momentum %.1f kg·m/s)" % momentum)
 
 
 func _read_inputs() -> void:
@@ -265,16 +326,7 @@ func _compute_and_apply_forces(delta: float) -> void:
 
 	# Rotor visual: swap between the Blender prop (idle) and a tinted blur disc
 	# (spinning) based on throttle cut.
-	var armed := control.collective >= 0.001
-	if armed != _armed:
-		_armed = armed
-		for i in _rotor_nodes.size():
-			if _armed:
-				_rotor_nodes[i].mesh = _rotor_spin_mesh
-				_rotor_nodes[i].material_override = _rotor_spin_materials[i]
-			else:
-				_rotor_nodes[i].mesh = _rotor_idle_meshes[i]
-				_rotor_nodes[i].material_override = null
+	_set_armed(control.collective >= 0.001)
 
 	var up: Vector3 = global_transform.basis.y
 	var throttles: Array[float] = [mix.fl, mix.fr, mix.bl, mix.br]
@@ -330,6 +382,21 @@ static func _mix_rotors(collective: float, pitch: float, roll: float) -> FlightM
 	return result
 
 
+## Swap rotor visuals between the tinted blur disc (armed) and the static
+## Blender prop (idle). No-op if the state is unchanged.
+func _set_armed(armed: bool) -> void:
+	if armed == _armed:
+		return
+	_armed = armed
+	for i in _rotor_nodes.size():
+		if _armed:
+			_rotor_nodes[i].mesh = _rotor_spin_mesh
+			_rotor_nodes[i].material_override = _rotor_spin_materials[i]
+		else:
+			_rotor_nodes[i].mesh = _rotor_idle_meshes[i]
+			_rotor_nodes[i].material_override = null
+
+
 func _apply_angular_damping() -> void:
 	var local_ang_vel: Vector3 = global_transform.basis.inverse() * angular_velocity
 	var damp_torque_local: Vector3 = -local_ang_vel * damping_factor
@@ -352,7 +419,9 @@ func _toggle_fpv() -> void:
 func reset() -> void:
 	linear_velocity = Vector3.ZERO
 	angular_velocity = Vector3.ZERO
+	_prev_velocity = Vector3.ZERO
 	global_transform = _spawn_transform
+	_state = State.FLYING
 	print("[Drone] Reset to spawn")
 
 
@@ -362,3 +431,7 @@ func get_flight_mode() -> String:
 
 func is_fpv_enabled() -> bool:
 	return _fpv_enabled
+
+
+func is_crashed() -> bool:
+	return _state == State.CRASHED

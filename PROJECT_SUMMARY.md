@@ -5,8 +5,10 @@ Single drone, flyable with a PS5 DualSense controller. Procedural terrain,
 chase/FPV cameras, debug HUD.
 
 Current phase: **Per-rotor thrust vectoring complete**, plus **Phase B assisted
-flight modes** (altitude hold + brake) — both acro and stabilized modes use
-individual rotor forces applied at each arm position. 12 headless tests pass.
+flight modes** (altitude hold + brake) and **Phase C crash / signal loss** —
+both acro and stabilized modes use individual rotor forces applied at each arm
+position; hard impacts kill the "signal" (rotors cut, physics tumbles the
+airframe, SIGNAL LOST overlay, frozen FPV feed). 15 headless tests pass.
 
 ---
 
@@ -57,6 +59,25 @@ Hover throttle per-rotor: `(mass * gravity) / (4 * max_thrust)`.
 Static `_mix_rotors(collective, pitch, roll)` handles anti-clip scaling and
 MIN_ROTOR (0.02) protection. Early-returns all zeros if collective < 0.001
 (throttle cut kills motors).
+
+**Crash / signal loss (Phase C):** two states, `FLYING` / `CRASHED`. Detection
+lives in `_integrate_forces` (not `body_entered` — that signal carries no
+contact normal): requires `contact_monitor = true` + `max_contacts_reported = 4`
+on the RigidBody3D (set in `drone.tscn`, along with `continuous_cd = true` —
+without CCD the 0.12m-thin drone tunnels straight through thin geometry above
+~10 m/s, which fast dives easily exceed). A contact crashes iff impact momentum
+(`_prev_velocity.length() * mass`, previous-tick velocity since the solver has
+already absorbed the impact by report time) exceeds `crash_momentum_threshold`
+(8 kg·m/s ≈ 4 m/s — the spawn free-fall onto the pad arrives at ~6.1, so the
+threshold must stay above that) **and** the hit is direct (angle between
+−velocity and contact normal
+within `crash_max_impact_angle_deg`, 60°); slow or grazing contacts bounce. A
+near-zero-velocity guard covers resting contact on the spawn pad. On crash:
+state → CRASHED, `crash_detected` emitted, inputs zeroed, rotor visuals to idle.
+While CRASHED, `_physics_process` skips inputs/forces/damping — gravity and
+inertia tumble the airframe naturally (no magic forces). Only `reset_drone`
+(Triangle) and `toggle_fpv` (R1 — the camera belongs to the pilot, not the dead
+drone) are handled; `toggle_flight_mode` is ignored. `reset()` restores FLYING.
 
 ### `scripts/drone/flight_mode_base.gd` — Abstract Base
 
@@ -138,9 +159,18 @@ On-screen overlay: flight mode, FPV status, altitude-hold/brake assist
 indicators, throttle %, stick inputs, heading/pitch/roll angles, speed,
 altitude. Compact log every 60 frames.
 
+**Signal-loss overlay (Phase C):** on `crash_detected`, a pulsing red
+"⚠ SIGNAL LOST" banner appears and telemetry dims. The FPV *feed* dies at the
+crash instant: if the crash happened in FPV, the last rendered frame is captured
+(`get_viewport().get_texture().get_image()`) and frozen fullscreen; if it
+happened in chase cam, no frame was ever captured, so entering FPV afterwards
+shows a plain black "no signal" screen. Chase cam always renders live — R1
+during a crash bails from the dead feed to watch the wreck. Reset (polled via
+`is_crashed()`) clears everything.
+
 ### `scripts/test/flight_mode_test.gd` — Headless Test Harness
 
-12 tests using `Input.action_press/release` + `await get_tree().physics_frame`:
+15 tests using `Input.action_press/release` + `await get_tree().physics_frame`:
 
 | Test | Input | Verification |
 |---|---|---|
@@ -156,6 +186,9 @@ altitude. Compact log every 60 frames.
 | Roll→yaw coupling | 60% roll + 30% throttle, 30 ticks | heading delta < 45° |
 | Altitude hold | Engage at 500m with -3 m/s sink, 200 ticks | Within 0.5m of engage altitude, |vel| < 1 m/s |
 | Brake | Inject (5, 0, 3) m/s, brake 180 ticks (~3s, tilt-based) | Speed < 50% of initial |
+| Crash on hard impact | Drop at -12 m/s onto ground | is_crashed() true |
+| Gentle landing | Acro throttle-cut settle at ~1.7 m/s | No crash |
+| Reset clears crash | Crash, reset(), 5 ticks | FLYING, near spawn |
 
 Run: `godot --headless --path . scenes/test/flight_mode_test_scene.tscn`
 (or `./run_tests.sh`)
@@ -267,6 +300,8 @@ triggers, so the actions never fired on a real controller.
 | Stab input deadzone | flight_mode_stabilized.gd | 0.05 |
 | Stab angle deadzone | flight_mode_stabilized.gd | 1.5° (blended) |
 | FPV rotation smoothing | chase_camera.gd | 0.92 |
+| Crash momentum threshold | drone_controller.gd | 8.0 kg·m/s |
+| Crash max impact angle | drone_controller.gd | 60° |
 | Altitude hold P gain | flight_mode_altitude_hold.gd | 0.15 |
 | Altitude hold D gain | flight_mode_altitude_hold.gd | 0.3 |
 | Altitude hold release blend time | flight_mode_altitude_hold.gd | 0.3 s |
