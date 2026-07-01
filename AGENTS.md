@@ -172,11 +172,33 @@ The `_rotor_positions` array order is `[FL, FR, BL, BR]` and the mixer output
 
 ## Known Issues
 
-- Small sub-degree jitter on pitch/roll near level in stabilized mode (limit
-  cycle from the PD controller interacting with physics stepping). D-term
-  filtering or gyro LPF would help.
 - Roll→yaw coupling during aggressive dives — real physics effect, not
   currently compensated.
+- **Stabilized mode "jump" when releasing stick near level**
+  (`flight_mode_stabilized.gd`): rate-mode (stick active) and auto-level
+  (stick released) are two entirely different control laws — rate-PD on
+  angular velocity (`rate_p_gain = 4.0`) vs. angle-PD in world frame
+  (`stabilize_p_gain = 15.0`, ~4x stronger gain-equivalent at the same tilt).
+  The switch at `input_deadzone = 0.05` is a hard binary swap with no
+  blending, so releasing the stick while still tilted can produce a visible
+  torque discontinuity ("snap" into level) as the controller jumps from a
+  modest rate-correction to a much more aggressive angle-correction. This is
+  compounded by `_apply_angular_damping()` in `drone_controller.gd` damping
+  the **raw** angular velocity every tick, stacked on the flight mode's own
+  D-term which uses the **filtered** angular velocity — a brief mismatch
+  right at the mode-switch instant. Likely fix: blend between the two
+  control laws across the deadzone instead of hard-switching.
+- **Stabilized mode feels "sticky" near level under active stick input**
+  (`flight_mode_stabilized.gd`): the gyro low-pass filter
+  (`gyro_filter_alpha = 0.35`, added to fix PD limit-cycle jitter) is reused
+  for the rate-mode branch's `rate_error = target_rate - local_ang_vel`, not
+  just the auto-level D-term. That filter adds ~1-2 frames of lag to the
+  pilot's own control feedback loop. Near level, commanded rates from small
+  stick deflections are already tiny, so the lag is proportionally more
+  noticeable there than during large, fast stick inputs — reads as
+  sluggish/resistant response. Likely fix: use two separate filtered signals
+  — heavily-filtered for auto-level's D-term (noise rejection), raw or
+  lightly-filtered for rate-mode's feedback (responsiveness).
 
 ## License
 

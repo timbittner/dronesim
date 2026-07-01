@@ -8,8 +8,8 @@ extends Camera3D
 ## Chase: follows behind based on drone yaw only, looks directly at drone.
 
 @export var target_path: NodePath = ""  # Set to the drone node
-@export var chase_distance: float = 4.0
-@export var chase_height: float = 1.5
+@export var chase_distance: float = 2.2
+@export var chase_height: float = 0.9
 @export var follow_speed: float = 8.0
 
 ## FPV rotation smoothing factor (0..1). Higher = more smoothing.
@@ -18,7 +18,7 @@ extends Camera3D
 @export var fpv_smoothing: float = 0.92
 
 var _target: Node3D
-var _fpv: bool = true  # FPV by default
+var _fpv: bool = false  # 3PV by default
 var _drone_controller: DroneController
 
 

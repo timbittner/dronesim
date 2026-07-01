@@ -240,6 +240,9 @@ func test_acro_holds_pitch_after_input() -> bool:
 	_reset_drone()
 	_set_acro_mode()
 
+	# Acro has no hover assist — needs throttle for rotors to have authority.
+	Input.action_press("throttle_up", 0.5)
+
 	# Brief pitch-up input at 15% strength
 	Input.action_press("pitch_backward", 0.15)
 	await _run_ticks(15)
@@ -247,6 +250,7 @@ func test_acro_holds_pitch_after_input() -> bool:
 
 	# Wait for angular damping to settle, then check drone holds angle
 	await _run_ticks(300)
+	Input.action_release("throttle_up")
 
 	var euler := _drone.global_transform.basis.get_euler()
 	var pitch_deg := _rad_to_deg(euler.x)
@@ -266,6 +270,9 @@ func test_acro_holds_roll_after_input() -> bool:
 	_reset_drone()
 	_set_acro_mode()
 
+	# Acro has no hover assist — needs throttle for rotors to have authority.
+	Input.action_press("throttle_up", 0.5)
+
 	# Brief roll-right input at 15% strength
 	Input.action_press("roll_right", 0.15)
 	await _run_ticks(15)
@@ -273,6 +280,7 @@ func test_acro_holds_roll_after_input() -> bool:
 
 	# Wait for angular damping to settle
 	await _run_ticks(300)
+	Input.action_release("throttle_up")
 
 	var euler := _drone.global_transform.basis.get_euler()
 	var roll_deg := _rad_to_deg(euler.z)

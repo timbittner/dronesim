@@ -3,10 +3,6 @@
 [ext_resource type="Script" uid="uid://c17svoyqsayfm" path="res://scripts/drone/drone_controller.gd" id="1_drone_ctrl"]
 [ext_resource type="Script" uid="uid://cf7sjdkmui05u" path="res://scripts/drone/debug_axes.gd" id="3_debug_axes"]
 
-[sub_resource type="SphereMesh" id="SphereMesh_cam"]
-radius = 0.04
-height = 0.08
-
 [sub_resource type="BoxShape3D" id="BoxShape_collision"]
 size = Vector3(0.4, 0.12, 0.4)
 
@@ -27,10 +23,6 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.25, 0.07, 0.25)
 
 [node name="RotorBR" type="Node3D" parent="." unique_id=1581842411]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.25, 0.07, 0.25)
-
-[node name="CameraMount" type="MeshInstance3D" parent="." unique_id=1517198247]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.04, 0.15)
-mesh = SubResource("SphereMesh_cam")
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="." unique_id=1194695645]
 shape = SubResource("BoxShape_collision")

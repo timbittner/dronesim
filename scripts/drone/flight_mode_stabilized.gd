@@ -6,21 +6,27 @@ extends FlightModeBase
 ## Control signals: collective hover base + PD-corrected pitch/roll differentials.
 ## Yaw: direct stick-to-torque mapping (same as acro), no stabilizer intervention.
 ##
-## Auto-level uses a blended P gain below ANGLE_DEADZONE — instead of a hard
-## on/off switch, the P gain ramps linearly from 0 at 0° tilt to full strength
-## at the deadzone boundary. The D gain is always active. This eliminates the
-## limit-cycle oscillation (twitching) that hard deadzones produce.
+## Auto-level uses a plain linear P term on tilt angle (no deadzone — it
+## already tapers to zero as angle approaches 0 on its own) plus a D term on
+## a low-pass-filtered gyro reading, to avoid feeding raw per-step angular
+## velocity noise straight into torque.
 
 ## Per-rotor hover throttle (set by controller: (mass * g) / (4 * max_thrust)).
 var hover_throttle: float = 0.0
+
+## Per-rotor max thrust (set by controller), used to convert torque to a
+## per-rotor throttle offset.
+var max_thrust: float = 50.0
 
 # --- Auto-level PD gains ---
 @export var stabilize_p_gain: float = 15.0
 @export var stabilize_d_gain: float = 4.0
 
-# --- Auto-level angle deadzone (radians) ---
-## P gain blends from 0 to full over this range, preventing hard on/off cycling.
-const ANGLE_DEADZONE: float = 0.0262  # ~1.5 degrees
+# --- Gyro low-pass filter ---
+## One-pole IIR low-pass on angular velocity before it feeds the D term.
+## Lower = more smoothing (and more lag).
+@export var gyro_filter_alpha: float = 0.35
+var _filtered_ang_vel: Vector3 = Vector3.ZERO
 
 # --- Rate control parameters ---
 @export var max_pitch_rate: float = 1.5   # rad/s
@@ -35,10 +41,6 @@ const ANGLE_DEADZONE: float = 0.0262  # ~1.5 degrees
 # --- Differential clipping limit ---
 @export var max_offset: float = 0.4
 
-## Conversion: torque = max_thrust * δ → δ = torque / max_thrust
-const TORQUE_TO_OFFSET: float = 1.0 / 50.0
-
-
 func compute(
 	throttle: float,
 	pitch: float,
@@ -50,11 +52,17 @@ func compute(
 ) -> FlightControl:
 	var result := FlightControl.new()
 
+	## Conversion: torque = max_thrust * δ → δ = torque / max_thrust
+	var torque_to_offset: float = 1.0 / max_thrust
+
 	# Collective hover base (throttle input adjusts altitude).
 	result.collective = clampf(hover_throttle + throttle * 0.15, 0.0, 1.0)
 
+	# Low-pass filter the gyro reading before it feeds any control math.
+	_filtered_ang_vel = _filtered_ang_vel.lerp(angular_velocity, gyro_filter_alpha)
+
 	# Convert angular velocity to body frame
-	var local_ang_vel: Vector3 = basis.inverse() * angular_velocity
+	var local_ang_vel: Vector3 = basis.inverse() * _filtered_ang_vel
 
 	# Check if any attitude stick is active
 	var stick_active: bool = absf(pitch) > input_deadzone \
@@ -71,13 +79,13 @@ func compute(
 		var rate_error: Vector3 = target_rate - local_ang_vel
 		var desired_torque: Vector3 = rate_error * rate_p_gain
 
-		result.pitch_diff = desired_torque.x * TORQUE_TO_OFFSET
-		result.roll_diff = -desired_torque.z * TORQUE_TO_OFFSET
+		result.pitch_diff = desired_torque.x * torque_to_offset
+		result.roll_diff = -desired_torque.z * torque_to_offset
 		# Yaw: direct mapping, same as acro
 		result.yaw_torque = yaw * 1.5
 
 	else:
-		# --- Auto-level: blended PD on tilt error ---
+		# --- Auto-level: linear P on tilt angle, D on filtered gyro ---
 		var body_up: Vector3 = basis.y
 		var world_up: Vector3 = Vector3.UP
 
@@ -86,23 +94,18 @@ func compute(
 
 		var world_restoring: Vector3 = Vector3.ZERO
 		if axis.length_squared() > 1.0e-6:
-			# Blend P gain from 0 at 0° to full at ANGLE_DEADZONE boundary.
-			# This eliminates the limit-cycle jitter that hard deadzones cause.
-			var effective_p_gain: float = stabilize_p_gain
-			if angle < ANGLE_DEADZONE:
-				effective_p_gain *= angle / ANGLE_DEADZONE
-			world_restoring = axis.normalized() * angle * effective_p_gain
+			world_restoring = axis.normalized() * angle * stabilize_p_gain
 
-		# D gain always active — provides damping at all angles
-		var world_damping: Vector3 = -angular_velocity * stabilize_d_gain
+		# D gain on the filtered gyro reading — provides damping at all angles
+		var world_damping: Vector3 = -_filtered_ang_vel * stabilize_d_gain
 		var world_torque: Vector3 = world_restoring + world_damping
 
 		# Convert to body frame, zero out yaw (no yaw auto-level)
 		var body_torque: Vector3 = basis.inverse() * world_torque
 		body_torque.y = 0.0
 
-		result.pitch_diff = body_torque.x * TORQUE_TO_OFFSET
-		result.roll_diff = -body_torque.z * TORQUE_TO_OFFSET
+		result.pitch_diff = body_torque.x * torque_to_offset
+		result.roll_diff = -body_torque.z * torque_to_offset
 		result.yaw_torque = 0.0
 
 	# Clamp individual diffs to max_offset

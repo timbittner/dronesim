@@ -10,7 +10,7 @@ signal flight_mode_changed(mode_name: String)
 signal fpv_toggled(enabled: bool)
 
 # --- Thrust ---
-@export var max_thrust: float = 50.0  # Newtons per rotor
+@export var max_thrust: float = 17.5  # Newtons per rotor (35% of previous 50.0)
 
 # Per-rotor hover throttle: (mass * gravity) / (4 * max_thrust)
 var hover_throttle: float = 0.0
@@ -29,10 +29,15 @@ var _throttle_input: float = 0.0
 var _pitch_input: float = 0.0
 var _roll_input: float = 0.0
 var _yaw_input: float = 0.0
-var _fpv_enabled: bool = true
+var _fpv_enabled: bool = false
 var _spawn_transform: Transform3D
 
-var _flight_mode: String = "stabilized"
+var _flight_mode: String = "acro"
+
+## Average of the last applied rotor mix (post anti-clip/idle clamping), as a
+## 0..100 percentage. This is the actual commanded thrust, not a recomputed
+## approximation — read by the HUD instead of re-deriving it independently.
+var thrust_percent: float = 0.0
 
 # --- Blender models (GLB) ---
 # The drone's body, arms, and propellers are authored in Blender
@@ -74,11 +79,11 @@ func _ready() -> void:
 	hover_throttle = (mass * gravity) / (4.0 * max_thrust)
 
 	var acro := FlightModeAcro.new()
-	acro.hover_throttle = hover_throttle
 	_flight_modes["acro"] = acro
 
 	var stabilized := FlightModeStabilized.new()
 	stabilized.hover_throttle = hover_throttle
+	stabilized.max_thrust = max_thrust
 	_flight_modes["stabilized"] = stabilized
 
 	_current_mode = _flight_modes[_flight_mode]
@@ -219,6 +224,7 @@ func _compute_and_apply_forces(delta: float) -> void:
 	)
 
 	var mix := _mix_rotors(control.collective, control.pitch_diff, control.roll_diff)
+	thrust_percent = (mix.fl + mix.fr + mix.bl + mix.br) * 0.25 * 100.0
 
 	# Rotor visual: swap between the Blender prop (idle) and a tinted blur disc
 	# (spinning) based on throttle cut.

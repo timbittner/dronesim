@@ -67,9 +67,7 @@ func _gather_telemetry() -> Dictionary:
 	var roll_deg: float = rad_to_deg(euler.z)
 	var speed_mps: float = _drone.linear_velocity.length()
 	var altitude: float = _drone.global_position.y
-	var throttle_pct: float = clampf(
-		_drone.hover_throttle + _drone._throttle_input * 0.15, 0.0, 1.0
-	) * 100.0
+	var throttle_pct: float = _drone.thrust_percent
 
 	return {
 		"throttle_pct": throttle_pct,
