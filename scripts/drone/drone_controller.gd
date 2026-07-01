@@ -34,12 +34,23 @@ var _spawn_transform: Transform3D
 
 var _flight_mode: String = "stabilized"
 
+# --- Blender models (GLB) ---
+# The drone's body, arms, and propellers are authored in Blender
+# (assets/models/drone_parts.blend) and exported as GLB. Each GLB carries one
+# representative part mesh; we assign those meshes to the anchor nodes in the
+# scene. See AGENTS.md "Coordinate System" for how Blender axes map to Godot.
+const BODY_GLB: PackedScene = preload("res://assets/models/drone_body.glb")
+const ARM_GLB: PackedScene = preload("res://assets/models/arm.glb")
+const PROP_GLB: PackedScene = preload("res://assets/models/propeller.glb")
+
 # --- Rotor visual ---
+# Front rotors (FL/FR) and back rotors (BL/BR) use different-colored Blender
+# props for at-a-glance orientation. The idle mesh + spin-disc tint are tracked
+# per rotor so each keeps its color.
 var _rotor_nodes: Array[MeshInstance3D] = []
-var _rotor_idle_meshes: Array[Mesh] = []
-var _rotor_idle_materials: Array[Material] = []
-var _rotor_spin_mesh: Mesh
-var _rotor_spin_material: Material
+var _rotor_idle_meshes: Array[Mesh] = []        # per-rotor stopped prop
+var _rotor_spin_materials: Array[Material] = []  # per-rotor tinted blur disc
+var _rotor_spin_mesh: Mesh                        # shared blur-disc geometry
 var _armed: bool = false
 
 # Rotor positions in local body frame. Order is [FL, FR, BL, BR] and MUST match
@@ -72,32 +83,108 @@ func _ready() -> void:
 
 	_current_mode = _flight_modes[_flight_mode]
 
-	_setup_rotor_visuals()
+	_setup_visuals()
 
 
-func _setup_rotor_visuals() -> void:
-	# Collect rotor MeshInstance3D children and snapshot their idle state.
-	for child in get_children():
-		if child is MeshInstance3D and child.name.begins_with("Rotor"):
-			_rotor_nodes.append(child)
-			_rotor_idle_meshes.append(child.mesh)
-			_rotor_idle_materials.append(child.material_override)
+func _setup_visuals() -> void:
+	# The body, arms, and rotors are bare Node3D markers positioned in drone.tscn
+	# (markers, not MeshInstance3D, so the editor shows no "missing mesh"
+	# warnings). Geometry comes from the Blender GLB models, attached as a
+	# MeshInstance3D child of each marker at runtime.
+	_attach_mesh(get_node_or_null("Body"), _mesh_from_glb(BODY_GLB))
 
-	# Create spinning disc mesh — flat disc, same diameter as cone base.
+	var arm_mesh := _mesh_from_glb(ARM_GLB)
+	for arm_name in ["ArmFL", "ArmFR", "ArmBL", "ArmBR"]:
+		_attach_mesh(get_node_or_null(arm_name), arm_mesh)
+
+	# Propeller: propeller.glb exports a front-colored prop (PropFL) and a
+	# back-colored prop (PropBL). Front rotors get the front prop, back the back.
+	var front := _part_from_glb(PROP_GLB, "PropFL")
+	var back := _part_from_glb(PROP_GLB, "PropBL")
+
+	# Shared blur-disc geometry (prop spans ~0.18, so radius ~0.09).
 	var disc := CylinderMesh.new()
-	disc.top_radius = 0.08
-	disc.bottom_radius = 0.08
-	disc.height = 0.01
+	disc.top_radius = 0.09
+	disc.bottom_radius = 0.09
+	disc.height = 0.006
 	_rotor_spin_mesh = disc
 
-	# Translucent material with subtle emission for spinning rotors.
-	var spin_mat := StandardMaterial3D.new()
-	spin_mat.albedo_color = Color(0.35, 0.5, 0.5, 0.35)
-	spin_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	spin_mat.emission_enabled = true
-	spin_mat.emission = Color(0.2, 0.3, 0.35)
-	spin_mat.emission_energy_multiplier = 0.4
-	_rotor_spin_material = spin_mat
+	# Attach the matching stopped prop to each rotor marker and build the
+	# per-rotor spin disc, colored in code from the prop's color.
+	for rotor_name in ["RotorFL", "RotorFR", "RotorBL", "RotorBR"]:
+		var marker := get_node_or_null(rotor_name) as Node3D
+		if marker == null:
+			continue
+		var part: Dictionary = front if rotor_name.begins_with("RotorF") else back
+		var part_mesh: Mesh = part.get("mesh")
+		_rotor_nodes.append(_attach_mesh(marker, part_mesh))
+		_rotor_idle_meshes.append(part_mesh)
+		_rotor_spin_materials.append(_make_spin_material(part.get("color")))
+
+
+## Add a MeshInstance3D child holding `mesh` to a marker node. Returns the new
+## MeshInstance3D (or null if the marker is missing).
+func _attach_mesh(marker: Node, mesh: Mesh) -> MeshInstance3D:
+	if marker == null:
+		return null
+	var mi := MeshInstance3D.new()
+	mi.mesh = mesh
+	marker.add_child(mi)
+	return mi
+
+
+## Build a translucent, emissive blur-disc material of the given color.
+func _make_spin_material(color: Color) -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(color.r, color.g, color.b, 0.4)
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.emission_enabled = true
+	mat.emission = color
+	mat.emission_energy_multiplier = 0.5
+	return mat
+
+
+## Instantiate a GLB PackedScene and return the first MeshInstance3D's mesh.
+func _mesh_from_glb(scene: PackedScene) -> Mesh:
+	if scene == null:
+		return null
+	var inst := scene.instantiate()
+	var mi := _first_mesh_instance(inst)
+	var mesh: Mesh = mi.mesh if mi else null
+	inst.free()
+	return mesh
+
+
+## Instantiate a GLB and return {mesh, color} for the named MeshInstance3D
+## (falls back to the first one found). Color comes from the mesh's material.
+func _part_from_glb(scene: PackedScene, node_name: String) -> Dictionary:
+	if scene == null:
+		return {"mesh": null, "color": Color.WHITE}
+	var inst := scene.instantiate()
+	var mi := inst.find_child(node_name, true, false) as MeshInstance3D
+	if mi == null:
+		mi = _first_mesh_instance(inst)
+	var mesh: Mesh = mi.mesh if mi else null
+	var color := Color(0.5, 0.5, 0.5)
+	if mi:
+		var mat := mi.get_active_material(0)
+		if mat == null and mi.mesh:
+			mat = mi.mesh.surface_get_material(0)
+		if mat is StandardMaterial3D:
+			color = (mat as StandardMaterial3D).albedo_color
+	inst.free()
+	return {"mesh": mesh, "color": color}
+
+
+## Depth-first search for the first MeshInstance3D under a node.
+func _first_mesh_instance(node: Node) -> MeshInstance3D:
+	if node is MeshInstance3D:
+		return node
+	for c in node.get_children():
+		var found := _first_mesh_instance(c)
+		if found:
+			return found
+	return null
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -133,17 +220,18 @@ func _compute_and_apply_forces(delta: float) -> void:
 
 	var mix := _mix_rotors(control.collective, control.pitch_diff, control.roll_diff)
 
-	# Rotor visual: swap between cone (idle) and disc (spinning) based on throttle cut.
+	# Rotor visual: swap between the Blender prop (idle) and a tinted blur disc
+	# (spinning) based on throttle cut.
 	var armed := control.collective >= 0.001
 	if armed != _armed:
 		_armed = armed
 		for i in _rotor_nodes.size():
 			if _armed:
 				_rotor_nodes[i].mesh = _rotor_spin_mesh
-				_rotor_nodes[i].material_override = _rotor_spin_material
+				_rotor_nodes[i].material_override = _rotor_spin_materials[i]
 			else:
 				_rotor_nodes[i].mesh = _rotor_idle_meshes[i]
-				_rotor_nodes[i].material_override = _rotor_idle_materials[i]
+				_rotor_nodes[i].material_override = null
 
 	var up: Vector3 = global_transform.basis.y
 	var throttles: Array[float] = [mix.fl, mix.fr, mix.bl, mix.br]

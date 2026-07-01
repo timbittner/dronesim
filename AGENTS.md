@@ -34,7 +34,8 @@ scripts/
     flight_mode_base.gd          Abstract base — FlightControl, RotorMix
     flight_mode_acro.gd          Direct differential mapping
     flight_mode_stabilized.gd    PD auto-level + rate mode
-    drone_body_mesh.gd           Procedural rhombic body
+    drone_body_mesh.gd           Procedural rhombic body (RETIRED — superseded
+                                 by drone_body.glb; kept for reference only)
     debug_axes.gd                RGB orientation arrows
   camera/
     chase_camera.gd              FPV + chase camera (FPV rotation smoothed)
@@ -47,8 +48,28 @@ scripts/
 assets/
   materials/
   models/
+    drone_parts.blend            Source: full drone (body, 4 arms, 4 props)
+    drone_body.glb               Exported body mesh (Mat_body); nose faces +Y
+                                 in Blender → Godot −Z (forward)
+    arm.glb                      Exported single arm mesh (Mat_arm)
+    propeller.glb                Front prop (Mat_prop_front, cyan) + back prop
+                                 (Mat_prop_back, pink) for orientation
   textures/
 ```
+
+### Drone geometry
+
+The drone's body, arms, and propellers are authored in Blender
+(`drone_parts.blend`) and exported as GLB. `drone.tscn` holds bare `Node3D`
+marker nodes (Body, RotorFL/FR/BL/BR, ArmFL/FR/BL/BR) at the correct local
+transforms — markers rather than `MeshInstance3D` so the editor shows no
+"missing mesh" warnings. `DroneController._setup_visuals()` loads each GLB and
+attaches its mesh as a `MeshInstance3D` child of the matching marker at runtime. Front rotors (FL/FR) use the
+cyan `Mat_prop_front` prop, back rotors (BL/BR) the pink `Mat_prop_back` prop,
+for at-a-glance orientation. When armed (throttle > 0) each rotor swaps its prop
+for a translucent blur disc built in code, tinted to that prop's color. Static
+prop colors are authored in Blender; the spin-disc color is derived from them in
+`DroneController._setup_visuals()`.
 
 ### Flight Pipeline
 

@@ -1,35 +1,7 @@
 [gd_scene format=4 uid="uid://5jri1ism1wee"]
 
 [ext_resource type="Script" uid="uid://c17svoyqsayfm" path="res://scripts/drone/drone_controller.gd" id="1_drone_ctrl"]
-[ext_resource type="Script" uid="uid://yq4qgem6gfvn" path="res://scripts/drone/drone_body_mesh.gd" id="2_drone_body"]
 [ext_resource type="Script" uid="uid://cf7sjdkmui05u" path="res://scripts/drone/debug_axes.gd" id="3_debug_axes"]
-
-[sub_resource type="StandardMaterial3D" id="Mat_body"]
-cull_mode = 2
-albedo_color = Color(0.2, 0.2, 0.25, 1)
-
-[sub_resource type="ArrayMesh" id="ArrayMesh_361hk"]
-_surfaces = [{
-"aabb": AABB(-0.12, -0.05, -0.16, 0.24, 0.1, 0.32),
-"format": 34359742471,
-"index_count": 36,
-"index_data": PackedByteArray("AAABAAIAAAACAAMABAAFAAYABAAGAAcABAAAAAEABAABAAcABwABAAIABwACAAYABgACAAMABgADAAUABQADAAAABQAAAAQA"),
-"primitive": 3,
-"uv_scale": Vector4(0, 0, 0, 0),
-"vertex_count": 8,
-"vertex_data": PackedByteArray("AAAAAM3MTD0K1yO+j8L1Pc3MTD2mm8Q9AAAAAM3MTD0K1yM+j8L1vc3MTD2mm8Q9AAAAAM3MTL0K1yO+j8L1vc3MTL2mm8Q9AAAAAM3MTL0K1yM+j8L1Pc3MTL2mm8Q9u5tCvUM0Y8GcJuen2G/frgUyOfSxN2CSbOGKx4O05MBDZLxCGAW+2WLZF1j/cbKu+c3FC0JqoaCSHnQ4QEpiwA==")
-}]
-
-[sub_resource type="StandardMaterial3D" id="Mat_rotor_pink"]
-albedo_color = Color(0.45, 0.3, 0.35, 1)
-
-[sub_resource type="CylinderMesh" id="CylMesh_rotor"]
-top_radius = 0.0
-bottom_radius = 0.08
-height = 0.02
-
-[sub_resource type="StandardMaterial3D" id="Mat_rotor_teal"]
-albedo_color = Color(0.25, 0.45, 0.45, 1)
 
 [sub_resource type="SphereMesh" id="SphereMesh_cam"]
 radius = 0.04
@@ -38,40 +10,23 @@ height = 0.08
 [sub_resource type="BoxShape3D" id="BoxShape_collision"]
 size = Vector3(0.4, 0.12, 0.4)
 
-[sub_resource type="StandardMaterial3D" id="Mat_arm"]
-albedo_color = Color(0.15, 0.15, 0.17, 1)
-
-[sub_resource type="BoxMesh" id="BoxMesh_arm"]
-size = Vector3(0.28, 0.018, 0.025)
-
 [node name="Drone" type="RigidBody3D" unique_id=81519865]
 mass = 2.0
 script = ExtResource("1_drone_ctrl")
 
-[node name="Body" type="MeshInstance3D" parent="." unique_id=736570692]
-material_override = SubResource("Mat_body")
-mesh = SubResource("ArrayMesh_361hk")
-script = ExtResource("2_drone_body")
+[node name="Body" type="Node3D" parent="." unique_id=736570692]
 
-[node name="RotorBL" type="MeshInstance3D" parent="." unique_id=240470565]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.25, 0.07, 0.25)
-material_override = SubResource("Mat_rotor_pink")
-mesh = SubResource("CylMesh_rotor")
-
-[node name="RotorBR" type="MeshInstance3D" parent="." unique_id=1581842411]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.25, 0.07, 0.25)
-material_override = SubResource("Mat_rotor_pink")
-mesh = SubResource("CylMesh_rotor")
-
-[node name="RotorFL" type="MeshInstance3D" parent="." unique_id=264375285]
+[node name="RotorFL" type="Node3D" parent="." unique_id=264375285]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.25, 0.07, -0.25)
-material_override = SubResource("Mat_rotor_teal")
-mesh = SubResource("CylMesh_rotor")
 
-[node name="RotorFR" type="MeshInstance3D" parent="." unique_id=1223962384]
+[node name="RotorFR" type="Node3D" parent="." unique_id=1223962384]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.25, 0.07, -0.25)
-material_override = SubResource("Mat_rotor_teal")
-mesh = SubResource("CylMesh_rotor")
+
+[node name="RotorBL" type="Node3D" parent="." unique_id=240470565]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.25, 0.07, 0.25)
+
+[node name="RotorBR" type="Node3D" parent="." unique_id=1581842411]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.25, 0.07, 0.25)
 
 [node name="CameraMount" type="MeshInstance3D" parent="." unique_id=1517198247]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.04, 0.15)
@@ -84,22 +39,14 @@ shape = SubResource("BoxShape_collision")
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.053726792, 0)
 script = ExtResource("3_debug_axes")
 
-[node name="ArmBL" type="MeshInstance3D" parent="." unique_id=1604003424]
-transform = Transform3D(-0.7071, 0, 0.7071, 0, 1, 0, -0.7071, 0, -0.7071, -0.125, 0.07, 0.125)
-material_override = SubResource("Mat_arm")
-mesh = SubResource("BoxMesh_arm")
-
-[node name="ArmBR" type="MeshInstance3D" parent="." unique_id=1651520751]
-transform = Transform3D(0.7071, 0, 0.7071, 0, 1, 0, -0.7071, 0, 0.7071, 0.125, 0.07, 0.125)
-material_override = SubResource("Mat_arm")
-mesh = SubResource("BoxMesh_arm")
-
-[node name="ArmFL" type="MeshInstance3D" parent="." unique_id=609508173]
+[node name="ArmFL" type="Node3D" parent="." unique_id=609508173]
 transform = Transform3D(0.7071, 0, -0.7071, 0, 1, 0, 0.7071, 0, 0.7071, -0.125, 0.07, -0.125)
-material_override = SubResource("Mat_arm")
-mesh = SubResource("BoxMesh_arm")
 
-[node name="ArmFR" type="MeshInstance3D" parent="." unique_id=1775693796]
+[node name="ArmFR" type="Node3D" parent="." unique_id=1775693796]
 transform = Transform3D(-0.7071, 0, -0.7071, 0, 1, 0, 0.7071, 0, -0.7071, 0.125, 0.07, -0.125)
-material_override = SubResource("Mat_arm")
-mesh = SubResource("BoxMesh_arm")
+
+[node name="ArmBL" type="Node3D" parent="." unique_id=1604003424]
+transform = Transform3D(-0.7071, 0, -0.7071, 0, 1, 0, 0.7071, 0, -0.7071, -0.125, 0.07, 0.125)
+
+[node name="ArmBR" type="Node3D" parent="." unique_id=1651520751]
+transform = Transform3D(0.7071, 0, -0.7071, 0, 1, 0, 0.7071, 0, 0.7071, 0.125, 0.07, 0.125)

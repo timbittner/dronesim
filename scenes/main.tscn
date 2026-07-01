@@ -11,12 +11,15 @@ size = Vector3(2, 0.1, 2)
 [sub_resource type="BoxShape3D" id="BoxShape_spawn_pad"]
 size = Vector3(2, 0.1, 2)
 
-[sub_resource type="ProceduralSky" id="Sky_main"]
+[sub_resource type="ProceduralSkyMaterial" id="SkyMat_main"]
 sky_top_color = Color(0.25, 0.4, 0.6, 1)
 sky_horizon_color = Color(0.6, 0.65, 0.75, 1)
 sky_curve = 0.15
 ground_bottom_color = Color(0.15, 0.12, 0.1, 1)
 ground_horizon_color = Color(0.35, 0.35, 0.35, 1)
+
+[sub_resource type="Sky" id="Sky_main"]
+sky_material = SubResource("SkyMat_main")
 
 [sub_resource type="Environment" id="Env_sky"]
 background_mode = 1
@@ -26,8 +29,8 @@ ambient_light_color = Color(0.4, 0.45, 0.55, 1)
 ambient_light_energy = 0.5
 fog_enabled = true
 fog_light_color = Color(0.6, 0.55, 0.5, 1)
-fog_sun_color = Color(0.9, 0.7, 0.4, 1)
 fog_density = 0.008
+fog_sky_affect = 0.3
 
 [node name="Main" type="Node3D" unique_id=1501016617]
 
@@ -43,9 +46,9 @@ mesh = SubResource("BoxMesh_pad")
 shape = SubResource("BoxShape_spawn_pad")
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=1384618151]
-transform = Transform3D(0.855, 0, 0.518, 0.134, 0.966, -0.222, -0.5, 0.259, 0.826, 0, 10, 0)
+transform = Transform3D(0.85543597, 4.7922134e-05, 0.51790863, 0.13406833, 0.9658931, -0.22153166, -0.50025487, 0.2589413, 0.8262533, 0, 10, 0)
+light_color = Color(1, 0.92, 0.78, 1)
 light_energy = 1.4
-light_color = Color(1.0, 0.92, 0.78, 1)
 shadow_enabled = true
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=1052014582]

@@ -18,9 +18,10 @@ Main (Node3D)
 ├── SpawnPad (MeshInstance3D)
 ├── DirectionalLight3D
 ├── WorldEnvironment
-├── Drone (RigidBody3D)
+├── Drone (RigidBody3D)          # geometry from Blender GLBs (see below)
 │   ├── Body (MeshInstance3D)
 │   ├── RotorFL, RotorFR, RotorBL, RotorBR
+│   ├── ArmFL, ArmFR, ArmBL, ArmBR
 │   ├── CameraMount
 │   ├── CameraRig (Node3D)
 │   ├── CollisionShape3D
@@ -117,6 +118,17 @@ heading/pitch/roll angles, speed, altitude. Compact log every 60 frames.
 Run: `godot --headless --path . scenes/test/flight_mode_test_scene.tscn`
 
 ---
+
+## Drone Geometry
+
+Body, arms, and propellers are authored in Blender (`assets/models/drone_parts.blend`)
+and exported as GLB (`drone_body.glb`, `arm.glb`, `propeller.glb`). `drone.tscn`
+is bare `Node3D` marker nodes at the correct transforms (markers, so the editor
+shows no "missing mesh" warnings); `DroneController._setup_visuals()` attaches the
+GLB meshes as `MeshInstance3D` children at runtime. Front props
+(FL/FR) are cyan, back props (BL/BR) pink for orientation; when armed each rotor
+swaps to a code-built blur disc tinted to its prop color. The body nose faces −Z
+(forward). The old procedural `drone_body_mesh.gd` is retired.
 
 ## Coordinate System
 
