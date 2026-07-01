@@ -73,7 +73,10 @@ threshold must stay above that) **and** the hit is direct (angle between
 −velocity and contact normal
 within `crash_max_impact_angle_deg`, 60°); slow or grazing contacts bounce. A
 near-zero-velocity guard covers resting contact on the spawn pad. On crash:
-state → CRASHED, `crash_detected` emitted, inputs zeroed, rotor visuals to idle.
+state → CRASHED, `crash_detected` emitted, inputs zeroed, rotor visuals to idle,
+and a one-shot white-sand dust burst (`CPUParticles3D`, built in code) expands
+to ~5m at the impact point — world-space + top_level, so it stays put while the
+wreck tumbles away. Purely visual.
 While CRASHED, `_physics_process` skips inputs/forces/damping — gravity and
 inertia tumble the airframe naturally (no magic forces). Only `reset_drone`
 (Triangle) and `toggle_fpv` (R1 — the camera belongs to the pilot, not the dead

@@ -106,8 +106,10 @@ impact velocity is `_prev_velocity` (cached each physics tick) because the
 solver has already absorbed the impact from `linear_velocity` by the time the
 contact is reported.
 
-On crash the "signal" is lost: rotor forces stop (physics tumbles the airframe
-naturally — no magic forces), inputs are ignored except **Triangle** (reset)
+On crash a ~5m white-sand dust burst plays at the impact point (code-built
+`CPUParticles3D`, world-space so it stays put while the wreck tumbles — purely
+visual) and the "signal" is lost: rotor forces stop (physics tumbles the
+airframe naturally — no magic forces), inputs are ignored except **Triangle** (reset)
 and **R1** (camera toggle — the camera belongs to the pilot, not the dead
 drone; L1 mode toggle is ignored). The HUD shows a pulsing SIGNAL LOST banner.
 The FPV *feed* dies at the crash instant: crash in FPV → the last rendered

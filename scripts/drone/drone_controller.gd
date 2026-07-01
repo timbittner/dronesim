@@ -84,6 +84,9 @@ var _rotor_spin_materials: Array[Material] = []  # per-rotor tinted blur disc
 var _rotor_spin_mesh: Mesh                        # shared blur-disc geometry
 var _armed: bool = false
 
+# One-shot dust burst played at the impact point on crash. Purely visual.
+var _crash_dust: CPUParticles3D
+
 # Rotor positions in local body frame. Order is [FL, FR, BL, BR] and MUST match
 # the mixer output order. Forward (nose) = −Z, right = +X. See AGENTS.md
 # "Coordinate System" — this array is the ground truth the names describe.
@@ -157,6 +160,73 @@ func _setup_visuals() -> void:
 		_rotor_nodes.append(_attach_mesh(marker, part_mesh))
 		_rotor_idle_meshes.append(part_mesh)
 		_rotor_spin_materials.append(_make_spin_material(part.get("color")))
+
+	_crash_dust = _make_crash_dust()
+	add_child(_crash_dust)
+
+
+## Build the one-shot crash dust burst: ~50 soft billboarded puffs, white-sand
+## colored, expanding radially to a ~5m radius (initial velocity vs damping:
+## the puffs coast out and stop as they fade). Emits in world space and the
+## node is top_level, so the cloud stays at the impact point instead of
+## following the tumbling wreck.
+func _make_crash_dust() -> CPUParticles3D:
+	var p := CPUParticles3D.new()
+	p.emitting = false
+	p.one_shot = true
+	p.explosiveness = 1.0
+	p.amount = 52
+	p.lifetime = 1.8
+	p.lifetime_randomness = 0.35
+	p.local_coords = false
+	p.top_level = true
+	p.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
+	p.emission_sphere_radius = 0.4
+	p.direction = Vector3.UP
+	p.spread = 85.0  # near-hemisphere: mostly outward, a little billow upward
+	p.initial_velocity_min = 3.5
+	p.initial_velocity_max = 6.5
+	p.damping_min = 3.0
+	p.damping_max = 4.5
+	p.gravity = Vector3(0.0, -0.4, 0.0)  # dust hangs, settles only slightly
+	p.scale_amount_min = 0.8
+	p.scale_amount_max = 1.6
+	var grow := Curve.new()  # puffs billow up to ~2.5x their size as they fade
+	grow.add_point(Vector2(0.0, 0.4))
+	grow.add_point(Vector2(1.0, 1.0))
+	p.scale_amount_curve = grow
+
+	# White-sand tint, fading out over the lifetime.
+	var sand := Color(0.87, 0.82, 0.7)
+	var ramp := Gradient.new()
+	ramp.set_color(0, Color(sand.r, sand.g, sand.b, 0.55))
+	ramp.set_color(1, Color(sand.r, sand.g, sand.b, 0.0))
+	p.color_ramp = ramp
+
+	# Soft circular puff: radial white→transparent gradient on a billboard quad.
+	var tex_grad := Gradient.new()
+	tex_grad.set_color(0, Color(1, 1, 1, 1))
+	tex_grad.set_color(1, Color(1, 1, 1, 0))
+	var tex := GradientTexture2D.new()
+	tex.gradient = tex_grad
+	tex.fill = GradientTexture2D.FILL_RADIAL
+	tex.fill_from = Vector2(0.5, 0.5)
+	tex.fill_to = Vector2(0.5, 0.0)
+	tex.width = 64
+	tex.height = 64
+
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
+	mat.vertex_color_use_as_albedo = true
+	mat.albedo_texture = tex
+
+	var quad := QuadMesh.new()
+	quad.size = Vector2(1.0, 1.0)
+	quad.material = mat
+	p.mesh = quad
+	return p
 
 
 ## Add a MeshInstance3D child holding `mesh` to a marker node. Returns the new
@@ -286,6 +356,9 @@ func _crash(momentum: float) -> void:
 	_brake_engaged = false
 	thrust_percent = 0.0
 	_set_armed(false)  # motors dead — props stop
+	if _crash_dust:
+		_crash_dust.global_position = global_position
+		_crash_dust.restart()
 	crash_detected.emit()
 	print("[Drone] CRASH — signal lost (impact momentum %.1f kg·m/s)" % momentum)
 
