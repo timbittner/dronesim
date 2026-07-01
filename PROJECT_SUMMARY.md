@@ -73,10 +73,7 @@ threshold must stay above that) **and** the hit is direct (angle between
 −velocity and contact normal
 within `crash_max_impact_angle_deg`, 60°); slow or grazing contacts bounce. A
 near-zero-velocity guard covers resting contact on the spawn pad. On crash:
-state → CRASHED, `crash_detected` emitted, inputs zeroed, rotor visuals to idle,
-and a one-shot white-sand dust burst (`CPUParticles3D`, built in code) expands
-to ~5m at the impact point — world-space + top_level, so it stays put while the
-wreck tumbles away. Purely visual.
+state → CRASHED, `crash_detected` emitted, inputs zeroed, rotor visuals to idle.
 While CRASHED, `_physics_process` skips inputs/forces/damping — gravity and
 inertia tumble the airframe naturally (no magic forces). Only `reset_drone`
 (Triangle) and `toggle_fpv` (R1 — the camera belongs to the pilot, not the dead
@@ -91,11 +88,17 @@ drone) are handled; `toggle_flight_mode` is ignored. `reset()` restores FLYING.
 Inner classes: `FlightControl` (collective, pitch_diff, roll_diff, yaw_torque)
 and `RotorMix` (fl, fr, bl, br).
 
-### `scripts/drone/flight_mode_acro.gd` — Acro/Rate Mode (40 lines)
+### `scripts/drone/flight_mode_acro.gd` — Acro/Rate Mode
 
-Pure stick-to-differential mapping. No auto-leveling.
-- `max_differential = 0.02` — rotor throttle offset per unit stick input
-- `throttle_range = 0.15` — 1/4 of old central-force value (4 rotors)
+Stick-to-differential mapping. No auto-leveling. Collective isn't a flat
+`hover + stick * range`: at and above center stick, throttle floors at
+`idle_throttle` (0.08) so the self-centering stick never zeros rotor
+authority on release; only an explicit throttle-down past center lets thrust
+drop below idle, down to a full cutoff at -1. Pitch/roll get an expo curve
+(`pitch_roll_expo = 0.3`) to soften twitchiness near center without blunting
+full-deflection response.
+- `idle_throttle = 0.08` — rotor floor at neutral stick and above
+- `max_differential = 0.057` — rotor throttle offset per unit (expo'd) stick input
 - `yaw_torque_factor = 1.5` — Nm per unit yaw input
 
 ### `scripts/drone/flight_mode_stabilized.gd` — Stabilized (120 lines)
@@ -106,9 +109,13 @@ Two sub-modes:
   with `rate_p_gain = 4.0`. Yaw uses direct stick-to-torque (same as acro),
   no rate PD.
 - **Sticks centered:** PD auto-level using world-frame cross product
-  (body_up × world_up) → angle → P gain. P gain blends from 0 at 0° to
-  full at 1.5° to prevent limit-cycle jitter. D gain (4.0) always active.
-  `stabilize_p_gain = 15.0`, `stabilize_d_gain = 4.0`.
+  (body_up × world_up) → angle → linear P gain (no deadzone needed — it
+  tapers to zero as angle approaches 0 on its own). D gain always active,
+  driven off a one-pole low-pass-filtered gyro reading (`gyro_filter_alpha =
+  0.35`) rather than raw angular velocity, to kill PD limit-cycle jitter.
+  `stabilize_p_gain = 15.0`, `stabilize_d_gain = 4.0`. The same filtered gyro
+  signal also feeds rate-mode's D-term — see AGENTS.md "Known Issues" for the
+  lag/jump tradeoffs that shared filter causes.
 
 ### `scripts/drone/flight_mode_altitude_hold.gd` — Altitude Hold (assist, not a mode)
 
@@ -147,6 +154,18 @@ input and stabilized's own auto-level, doesn't override them — the drone
 brakes by tilting into the wind and letting real rotor thrust do the work,
 same as a real quad). Vertical velocity untouched; composes with altitude
 hold (brake owns horizontal, altitude hold owns vertical).
+
+### `scripts/environment/crash_effects.gd` — Crash Effects (environment-side)
+
+`CrashEffects extends Node3D`, a node in `main.tscn` that listens to the
+drone's `crash_detected` signal — the controller owns flight/crash logic only,
+world reactions live here. On crash: one-shot white-sand dust burst
+(`CPUParticles3D`, built in code, CPU for gl_compatibility safety) at the
+impact point. Fast initial puff (~5–9 m/s against 4.5–7 damping coasts to a
+~3–6m radius in ~1.5s), then the cloud hangs at 80%→60% alpha and fades out
+over a ~10–13s lifetime. Emits in world space (`local_coords = false` +
+`top_level`), so the cloud stays put while the wreck tumbles away. Purely
+visual — no collision, no forces.
 
 ### `scripts/camera/chase_camera.gd` — Camera
 
@@ -234,9 +253,7 @@ tail (+Z). The full canonical table (with the mixer sign rationale) lives in
 | Mode | Stick input mapping | When centered |
 |---|---|---|
 | **Acro** | Direct differential mapping | Nothing — stays in current orientation |
-| **Stabilized** | Rate mode (target angular velocity, P=4.0) | Blended PD auto-level toward upright |
-
-Toggle with L1/R1.
+| **Stabilized** | Rate mode (target angular velocity, P=4.0) | PD auto-level toward upright |
 
 **Assists** (compose with either mode, held not toggled): altitude hold
 (L2/Shift) replaces collective with a PD hover hold; brake (R2/Ctrl) adds a
@@ -269,19 +286,6 @@ binding incorrectly used `InputEventJoypadButton` with `button_index` 6/7,
 which in Godot's abstracted `JoyButton` enum are Start and L3-click, not the
 triggers, so the actions never fired on a real controller.
 
----
-
-## Known Issues
-
-- **Auto-level jitter:** Sub-degree oscillations on pitch/roll near level
-  persist despite blended P gain and angular damping. Likely needs D-term
-  filtering on gyro measurement (vs on error) to fully eliminate.
-- **Roll→yaw coupling during aggressive dives:** Brief yaw deflection when
-  pitching aggressively at high throttle. Not compensated — real physics effect.
-- **`reset_drone` occasionally needs a held press, not a tap:** mitigated
-  (lower deadzone + physics-tick polling fallback) but not yet confirmed
-  fixed against real hardware. See AGENTS.md "Known Issues" for the full
-  writeup.
 
 ---
 
@@ -289,20 +293,22 @@ triggers, so the actions never fired on a real controller.
 
 | Parameter | Location | Value |
 |---|---|---|
-| max_thrust (per rotor) | drone_controller.gd | 50.0 N |
-| hover_throttle (per rotor) | drone_controller.gd | 0.098 (auto) |
+| max_thrust (per rotor) | drone_controller.gd | 17.5 N |
+| hover_throttle (per rotor) | drone_controller.gd | 0.28 (auto, at 2.0 kg mass) |
 | Angular damping | drone_controller.gd | (0.08, 1.0, 0.08) |
 | MIN_ROTOR | drone_controller.gd | 0.02 |
-| Acro max_differential | flight_mode_acro.gd | 0.02 |
-| Acro throttle_range | flight_mode_acro.gd | 0.15 |
+| Acro idle_throttle | flight_mode_acro.gd | 0.08 |
+| Acro max_differential | flight_mode_acro.gd | 0.057 |
+| Acro pitch_roll_expo | flight_mode_acro.gd | 0.3 |
 | Acro yaw_torque_factor | flight_mode_acro.gd | 1.5 |
 | Stab P gain | flight_mode_stabilized.gd | 15.0 |
 | Stab D gain | flight_mode_stabilized.gd | 4.0 |
 | Stab rate_P gain | flight_mode_stabilized.gd | 4.0 |
 | Stab max rates | flight_mode_stabilized.gd | 1.5 / 1.5 / 1.0 rad/s |
 | Stab input deadzone | flight_mode_stabilized.gd | 0.05 |
-| Stab angle deadzone | flight_mode_stabilized.gd | 1.5° (blended) |
+| Stab gyro_filter_alpha | flight_mode_stabilized.gd | 0.35 |
 | FPV rotation smoothing | chase_camera.gd | 0.92 |
+| Chase distance / height | chase_camera.gd | 2.2 m / 0.9 m |
 | Crash momentum threshold | drone_controller.gd | 8.0 kg·m/s |
 | Crash max impact angle | drone_controller.gd | 60° |
 | Altitude hold P gain | flight_mode_altitude_hold.gd | 0.15 |

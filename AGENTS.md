@@ -37,7 +37,7 @@ scripts/
     drone_controller.gd          Core controller — input, mixer, damping,
                                  crash detection + FLYING/CRASHED state
     flight_mode_base.gd          Abstract base — FlightControl, RotorMix
-    flight_mode_acro.gd          Direct differential mapping
+    flight_mode_acro.gd          Idle-floor throttle + expo differential, no auto-level
     flight_mode_stabilized.gd    PD auto-level + rate mode
     flight_mode_altitude_hold.gd Post-compute collective filter (not a mode)
     brake_assist.gd              Rotor-thrust tilt brake (assist, not a mode)
@@ -48,6 +48,7 @@ scripts/
     chase_camera.gd              FPV + chase camera (FPV rotation smoothed)
   environment/
     terrain_generator.gd         Procedural noise terrain
+    crash_effects.gd             Dust burst on crash (listens to crash_detected)
   ui/
     debug_hud.gd                 Telemetry overlay
   test/
@@ -106,16 +107,21 @@ impact velocity is `_prev_velocity` (cached each physics tick) because the
 solver has already absorbed the impact from `linear_velocity` by the time the
 contact is reported.
 
-On crash a ~5m white-sand dust burst plays at the impact point (code-built
-`CPUParticles3D`, world-space so it stays put while the wreck tumbles — purely
-visual) and the "signal" is lost: rotor forces stop (physics tumbles the
-airframe naturally — no magic forces), inputs are ignored except **Triangle** (reset)
+On crash the "signal" is lost: rotor forces stop (physics tumbles the airframe
+naturally — no magic forces), inputs are ignored except **Triangle** (reset)
 and **R1** (camera toggle — the camera belongs to the pilot, not the dead
 drone; L1 mode toggle is ignored). The HUD shows a pulsing SIGNAL LOST banner.
 The FPV *feed* dies at the crash instant: crash in FPV → the last rendered
 frame stays frozen on screen; crash in 3PV → no frame was captured, so
 switching to FPV shows a black "no signal" screen. Chase cam always renders
 live. Reset restores everything.
+
+Environment-side crash effects (a ~5m white-sand dust burst that hangs for
+~10-13s at the impact point) live in `scripts/environment/crash_effects.gd`,
+a `Node3D` in `main.tscn` that listens to the drone's `crash_detected` signal —
+the controller owns flight/crash logic only; what the world does in response
+does not belong in it. The dust emits in world space (`top_level`), so it stays
+put while the wreck tumbles. Purely visual, no collision or forces.
 
 ### Extension Points
 
@@ -220,8 +226,11 @@ correct-looking `project.godot` entry, check this first.
 
 ## Known Issues
 
-- Roll→yaw coupling during aggressive dives — real physics effect, not
-  currently compensated.
+- **Roll→yaw coupling during aggressive dives** — real physics effect
+  (pitching hard at high throttle briefly deflects yaw), not currently
+  compensated. The headless test for this
+  (`test_stabilized_roll_does_not_induce_yaw_spin`) only asserts the coupling
+  stays bounded (<45° heading delta), not that it's absent.
 - **Stabilized mode "jump" when releasing stick near level**
   (`flight_mode_stabilized.gd`): rate-mode (stick active) and auto-level
   (stick released) are two entirely different control laws — rate-PD on
@@ -247,25 +256,6 @@ correct-looking `project.godot` entry, check this first.
   sluggish/resistant response. Likely fix: use two separate filtered signals
   — heavily-filtered for auto-level's D-term (noise rejection), raw or
   lightly-filtered for rate-mode's feedback (responsiveness).
-- **`reset_drone` (Triangle) sometimes needs a held press, not a tap**
-  (`project.godot`, `drone_controller.gd`): investigated for Tim — ruled out
-  the "event consumed elsewhere" theory (grepped the whole project: the only
-  `_unhandled_input` handler is in `drone_controller.gd`, and no `Control`
-  node grabs focus, so nothing upstream can be swallowing the event).
-  Leading theory is deadzone-related: Apple's GameController framework (macOS
-  DualSense driver) reports even digital face buttons with an analog
-  `.value`, which Godot likely surfaces as `pressure` on
-  `InputEventJoypadButton`; the action's `deadzone: 0.5` gated
-  `is_action_pressed()` on that pressure crossing 0.5, so a very quick tap
-  that releases before the reported value ramps past 0.5 never registers as
-  "pressed" at all. Mitigated two ways: lowered `reset_drone`'s deadzone to
-  0.2 (still filters noise-floor values but tolerates a much lighter/quicker
-  press), and added an `Input.is_action_just_pressed("reset_drone")` poll in
-  `_physics_process` alongside the existing `_unhandled_input` edge trigger,
-  so a missed discrete event still gets caught the next physics tick
-  (`reset()` is idempotent, so double-firing in one frame is harmless). Not
-  independently confirmed against real hardware since this requires the
-  physical DualSense — report back if it still needs a hold after this fix.
 
 ## License
 
