@@ -18,6 +18,9 @@ modes use individual rotor forces applied at each arm position. See
 - **Renderer:** gl_compatibility (low-poly aesthetic, lightweight, VR-friendly later)
 - **Controller:** DualSense (PS5) via Godot input system
 - **Godot MCP:** `@coding-solo/godot-mcp` available for editor automation
+  (run/stop scenes, read debug output — use it to syntax-check GDScript)
+- **Blender MCP:** available in this workspace for driving Blender directly
+  (inspect/edit `drone_parts.blend`, re-export GLBs) when connected
 
 ## Architecture
 

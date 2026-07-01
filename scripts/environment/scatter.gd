@@ -1,14 +1,22 @@
+@tool
 extends Node3D
 
 ## Scatters visual-only trees and rocks across the terrain at generation time.
-## Trees = cone trunk + sphere canopy, rocks = rough box/sphere meshes.
+## Trees = cone trunk + sphere/cone canopy, rocks = rough box/sphere meshes.
 ## No collision bodies yet — visual only.
+##
+## Transforms are built explicitly as Transform3D(basis, origin). The chained
+## Transform3D.translated()/scaled()/rotated() helpers are GLOBAL (they move the
+## origin relative to the world origin), which previously flung canopies off
+## their trunks and rocks into the air. Do not reintroduce them here.
 
-@export var tree_count: int = 300
-@export var rock_count: int = 150
+@export var tree_count: int = 900
+@export var rock_count: int = 220
 @export var scatter_radius: float = 220.0  # stay inside generated terrain
-@export var min_spacing: float = 3.0       # min distance between objects
+@export var min_spacing: float = 4.0       # min distance between objects
 @export var flat_radius: float = 12.0      # keep spawn area clear
+@export var tree_scale_min: float = 1.6    # per-tree size multiplier range
+@export var tree_scale_max: float = 3.0
 
 # Shared meshes and materials (created once, reused across instances)
 var _trunk_mesh: CylinderMesh
@@ -18,6 +26,7 @@ var _canopy_pine_top: CylinderMesh  # cone-like layered canopy top
 var _canopy_pine_mid: CylinderMesh
 var _canopy_pine_low: CylinderMesh
 var _dead_trunk: CylinderMesh
+var _stub_mesh: CylinderMesh
 
 var _rock_box_mesh: BoxMesh
 var _rock_sphere_mesh: SphereMesh
@@ -39,11 +48,22 @@ func _ready() -> void:
 
 
 func _generate() -> void:
+	_clear_generated()
 	_rng = RandomNumberGenerator.new()
 	_rng.seed = 137
 	_setup_meshes_and_materials()
 	_scatter_trees()
 	_scatter_rocks()
+
+
+## Frees previously-generated preview nodes. Generated meshes are added without
+## an owner, so scene-defined children are left untouched and nothing generated
+## is persisted into the .tscn.
+func _clear_generated() -> void:
+	for child in get_children():
+		if child.owner == null:
+			remove_child(child)
+			child.queue_free()
 
 
 func _setup_meshes_and_materials() -> void:
@@ -85,6 +105,11 @@ func _setup_meshes_and_materials() -> void:
 	_dead_trunk.bottom_radius = 0.07
 	_dead_trunk.height = 1.5
 
+	_stub_mesh = CylinderMesh.new()
+	_stub_mesh.top_radius = 0.01
+	_stub_mesh.bottom_radius = 0.02
+	_stub_mesh.height = 0.3
+
 	# --- Rocks ---
 	_rock_box_mesh = BoxMesh.new()
 	_rock_box_mesh.size = Vector3(0.3, 0.2, 0.25)
@@ -119,6 +144,17 @@ func _setup_meshes_and_materials() -> void:
 	_rock_light_mat.roughness = 0.9
 
 
+## Adds one mesh part at an explicit world origin with an explicit basis.
+## Building the Transform3D directly avoids the global translated()/scaled()/
+## rotated() helpers, which would displace the origin.
+func _add_part(mesh: Mesh, mat: Material, origin: Vector3, part_basis: Basis) -> void:
+	var inst := MeshInstance3D.new()
+	inst.mesh = mesh
+	inst.material_override = mat
+	inst.transform = Transform3D(part_basis, origin)
+	add_child(inst)
+
+
 func _scatter_trees() -> void:
 	var placed_positions: Array[Vector2] = []
 
@@ -132,11 +168,12 @@ func _scatter_trees() -> void:
 			continue
 		placed_positions.append(pos2d)
 
+		var s := _rng.randf_range(tree_scale_min, tree_scale_max)
 		var tree_type := _rng.randi_range(0, 2)
 		match tree_type:
-			0: _spawn_deciduous(pos)
-			1: _spawn_pine(pos)
-			2: _spawn_dead_tree(pos)
+			0: _spawn_deciduous(pos, s)
+			1: _spawn_pine(pos, s)
+			2: _spawn_dead_tree(pos, s)
 
 
 func _scatter_rocks() -> void:
@@ -191,89 +228,77 @@ func _get_terrain_height(x: float, z: float) -> float:
 	return 0.0
 
 
-func _spawn_deciduous(pos: Vector3) -> void:
-	# Trunk
-	var trunk := MeshInstance3D.new()
-	trunk.mesh = _trunk_mesh
-	trunk.material_override = _trunk_mat
-	trunk.transform = Transform3D.IDENTITY.translated(pos + Vector3(0.0, 0.6, 0.0))
-	add_child(trunk)
+func _spawn_deciduous(pos: Vector3, s: float) -> void:
+	# A small random lean makes the grove feel less uniform.
+	var lean := _rng.randf_range(-0.05, 0.05)
+	var lean_basis := Basis.from_euler(Vector3(lean, _rng.randf_range(0.0, TAU), lean))
+	var trunk_basis := lean_basis * Basis.from_scale(Vector3(s, s, s))
 
-	# Canopy sphere (slightly randomized scale)
-	var canopy := MeshInstance3D.new()
-	canopy.mesh = _canopy_sphere
-	canopy.material_override = _canopy_green_mat if _rng.randf() < 0.6 else _canopy_dark_mat
-	var scale_var := 1.0 + _rng.randf_range(-0.2, 0.2)
-	canopy.transform = Transform3D.IDENTITY.translated(pos + Vector3(0.0, 1.6, 0.0)) \
-		.scaled(Vector3(scale_var, scale_var, scale_var))
-	add_child(canopy)
+	# Trunk: height 1.2 → centre sits half a (scaled) height above ground.
+	_add_part(_trunk_mesh, _trunk_mat, pos + Vector3(0.0, 0.6 * s, 0.0), trunk_basis)
+
+	# Main canopy sphere — bottom overlaps the trunk top so they stay joined.
+	var cvar := 1.0 + _rng.randf_range(-0.2, 0.35)
+	var canopy_mat := _canopy_green_mat if _rng.randf() < 0.6 else _canopy_dark_mat
+	_add_part(_canopy_sphere, canopy_mat, pos + Vector3(0.0, 1.6 * s, 0.0),
+		Basis.from_scale(Vector3(s * cvar, s * cvar, s * cvar)))
+
+	# A second, smaller offset blob for a fuller, less perfectly-round crown.
+	var off := Vector3(_rng.randf_range(-0.25, 0.25), 1.95, _rng.randf_range(-0.25, 0.25)) * s
+	_add_part(_canopy_sphere, canopy_mat, pos + off,
+		Basis.from_scale(Vector3(s * 0.7, s * 0.7, s * 0.7)))
 
 
-func _spawn_pine(pos: Vector3) -> void:
-	# Trunk
-	var trunk := MeshInstance3D.new()
-	trunk.mesh = _pine_trunk_mesh
-	trunk.material_override = _trunk_mat
-	trunk.transform = Transform3D.IDENTITY.translated(pos + Vector3(0.0, 0.9, 0.0))
-	add_child(trunk)
+func _spawn_pine(pos: Vector3, s: float) -> void:
+	var scale_basis := Basis.from_scale(Vector3(s, s, s))
 
-	# Pine canopy: 3 stacked cone layers
+	# Trunk (height 1.8 → centre at 0.9).
+	_add_part(_pine_trunk_mesh, _trunk_mat, pos + Vector3(0.0, 0.9 * s, 0.0), scale_basis)
+
+	# Pine canopy: 3 stacked cone layers, each overlapping the one below.
 	var layers := [
-		{ "mesh": _canopy_pine_low, "y_offset": 1.2 },
-		{ "mesh": _canopy_pine_mid, "y_offset": 1.8 },
-		{ "mesh": _canopy_pine_top, "y_offset": 2.3 },
+		{ "mesh": _canopy_pine_low, "y": 1.2 },
+		{ "mesh": _canopy_pine_mid, "y": 1.8 },
+		{ "mesh": _canopy_pine_top, "y": 2.3 },
 	]
 	for layer in layers:
-		var inst := MeshInstance3D.new()
-		inst.mesh = layer["mesh"]
-		inst.material_override = _canopy_dark_mat
-		inst.transform = Transform3D.IDENTITY.translated(pos + Vector3(0.0, layer["y_offset"], 0.0))
-		add_child(inst)
+		_add_part(layer["mesh"], _canopy_dark_mat,
+			pos + Vector3(0.0, layer["y"] * s, 0.0), scale_basis)
 
 
-func _spawn_dead_tree(pos: Vector3) -> void:
-	var trunk := MeshInstance3D.new()
-	trunk.mesh = _dead_trunk
-	trunk.material_override = _dead_mat
-	trunk.transform = Transform3D.IDENTITY.translated(pos + Vector3(0.0, 0.75, 0.0))
-	add_child(trunk)
+func _spawn_dead_tree(pos: Vector3, s: float) -> void:
+	var scale_basis := Basis.from_scale(Vector3(s, s, s))
 
-	# Add a tiny branch stub
-	var stub := MeshInstance3D.new()
-	var stub_mesh := CylinderMesh.new()
-	stub_mesh.top_radius = 0.01
-	stub_mesh.bottom_radius = 0.02
-	stub_mesh.height = 0.3
-	stub.mesh = stub_mesh
-	stub.material_override = _dead_mat
-	stub.transform = Transform3D.IDENTITY.translated(pos + Vector3(0.2, 1.4, 0.0)) \
-		.rotated(Vector3.FORWARD, 0.5)
-	add_child(stub)
+	# Trunk (height 1.5 → centre at 0.75).
+	_add_part(_dead_trunk, _dead_mat, pos + Vector3(0.0, 0.75 * s, 0.0), scale_basis)
+
+	# A tiny angled branch stub near the top. Rotation is baked into the basis
+	# (local), so the stub stays attached to the trunk.
+	var stub_basis := Basis(Vector3.FORWARD, 0.9) * scale_basis
+	_add_part(_stub_mesh, _dead_mat, pos + Vector3(0.18 * s, 1.35 * s, 0.0), stub_basis)
 
 
 func _spawn_boulder(pos: Vector3) -> void:
-	var rock := MeshInstance3D.new()
-	rock.mesh = _rock_box_mesh
-	rock.material_override = _rock_mat if _rng.randf() < 0.6 else _rock_light_mat
+	var mat := _rock_mat if _rng.randf() < 0.6 else _rock_light_mat
+	var scale_var := 0.6 + _rng.randf_range(0.0, 0.9)
 
-	var scale_var := 0.6 + _rng.randf_range(0.0, 0.8)
-	var rot_y := _rng.randf_range(0.0, TAU)
-	var rot_x := _rng.randf_range(-0.3, 0.3)
-	var rot_z := _rng.randf_range(-0.3, 0.3)
-	rock.transform = Transform3D.IDENTITY.translated(pos + Vector3(0.0, scale_var * 0.1, 0.0)) \
-		.scaled(Vector3(scale_var, scale_var, scale_var)) \
-		.rotated(Vector3.UP, rot_y) \
-		.rotated(Vector3.RIGHT, rot_x) \
-		.rotated(Vector3.FORWARD, rot_z)
-	add_child(rock)
+	# Random orientation, baked into the basis so it never moves the origin.
+	var rot := Basis.from_euler(Vector3(
+		_rng.randf_range(-0.3, 0.3),
+		_rng.randf_range(0.0, TAU),
+		_rng.randf_range(-0.3, 0.3)))
+	var rock_basis := rot * Basis.from_scale(Vector3(scale_var, scale_var, scale_var))
+
+	# Sit the boulder in the ground (centre near the surface → half-buried look)
+	# so it always reads as resting on the terrain, never floating.
+	_add_part(_rock_box_mesh, mat, pos + Vector3(0.0, scale_var * 0.05, 0.0), rock_basis)
 
 
 func _spawn_rubble(pos: Vector3) -> void:
-	var rock := MeshInstance3D.new()
-	rock.mesh = _rock_sphere_mesh
-	rock.material_override = _rock_mat if _rng.randf() < 0.5 else _rock_light_mat
+	var mat := _rock_mat if _rng.randf() < 0.5 else _rock_light_mat
+	var sx := 0.5 + _rng.randf_range(0.0, 0.7)
+	var rock_basis := Basis(Vector3.UP, _rng.randf_range(0.0, TAU)) \
+		* Basis.from_scale(Vector3(sx, sx * 0.7, sx * 0.85))
 
-	var scale_var := 0.5 + _rng.randf_range(0.0, 0.6)
-	rock.transform = Transform3D.IDENTITY.translated(pos + Vector3(0.0, scale_var * 0.15, 0.0)) \
-		.scaled(Vector3(scale_var, scale_var * 0.7, scale_var * 0.8))
-	add_child(rock)
+	# Flattened stone embedded in the ground.
+	_add_part(_rock_sphere_mesh, mat, pos + Vector3(0.0, sx * 0.05, 0.0), rock_basis)

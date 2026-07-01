@@ -1,3 +1,4 @@
+@tool
 class_name TerrainGenerator
 extends Node3D
 
@@ -21,9 +22,22 @@ func _ready() -> void:
 
 
 func _generate_terrain() -> void:
+	_clear_generated()
 	_setup_noise()
 	_build_mesh()
 	_build_collision()
+
+
+## Frees previously-generated preview nodes (mesh + collision) so rebuilds in
+## the editor don't stack duplicates. Generated nodes are added without an
+## owner, so the scene-defined Scatter child is left untouched and nothing
+## generated is persisted into the .tscn.
+func _clear_generated() -> void:
+	for child in get_children():
+		if child is MeshInstance3D or child is StaticBody3D:
+			if child.owner == null:
+				remove_child(child)
+				child.queue_free()
 
 
 func _setup_noise() -> void:
