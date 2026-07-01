@@ -82,14 +82,22 @@ func _gather_telemetry() -> Dictionary:
 		"altitude": altitude,
 		"flight_mode": _drone._flight_mode,
 		"fpv_enabled": _drone._fpv_enabled,
+		"altitude_hold_engaged": _drone._altitude_hold_engaged,
+		"brake_engaged": _drone._brake_engaged,
 	}
 
 
 func _format_telemetry(t: Dictionary) -> String:
+	var assist: String = ""
+	if t["altitude_hold_engaged"]:
+		assist += "ALT HOLD  "
+	if t["brake_engaged"]:
+		assist += "BRAKE"
 	return (
 		"═══ DRONE TELEMETRY ═══\n"
 		+ "Flight Mode : %s\n" % t["flight_mode"].to_upper()
 		+ "FPV         : %s\n" % ("ON" if t["fpv_enabled"] else "OFF")
+		+ "Assist      : %s\n" % (assist if not assist.is_empty() else "—")
 		+ "─────────────────────\n"
 		+ "Throttle    : %5.1f%%\n" % t["throttle_pct"]
 		+ "Pitch stick : %+0.2f\n" % t["pitch_stick"]
@@ -107,9 +115,9 @@ func _format_telemetry(t: Dictionary) -> String:
 
 func _format_telemetry_compact(t: Dictionary) -> String:
 	return (
-		"mode=%s fpv=%s thr=%.0f%% sticks=[p%+.2f r%+.2f y%+.2f t%+.2f] "
-		% [t["flight_mode"], t["fpv_enabled"], t["throttle_pct"],
-		   t["pitch_stick"], t["roll_stick"], t["yaw_stick"], t["throttle_stick"]]
+		"mode=%s fpv=%s alt_hold=%s brake=%s thr=%.0f%% sticks=[p%+.2f r%+.2f y%+.2f t%+.2f] "
+		% [t["flight_mode"], t["fpv_enabled"], t["altitude_hold_engaged"], t["brake_engaged"],
+		   t["throttle_pct"], t["pitch_stick"], t["roll_stick"], t["yaw_stick"], t["throttle_stick"]]
 		+ "H=%.1f° P=%.1f° R=%.1f° spd=%.1f alt=%.1f"
 		% [t["heading_deg"], t["pitch_deg"], t["roll_deg"],
 		   t["speed_mps"], t["altitude"]]
@@ -122,7 +130,7 @@ func _build_ui() -> void:
 	_bg.color = Color(0.0, 0.0, 0.0, 0.65)
 	_bg.set_anchors_preset(Control.PRESET_TOP_LEFT)
 	_bg.offset_right = 280.0
-	_bg.offset_bottom = 340.0
+	_bg.offset_bottom = 356.0
 	_bg.offset_left = 8.0
 	_bg.offset_top = 8.0
 	add_child(_bg)
@@ -134,7 +142,7 @@ func _build_ui() -> void:
 	_label.offset_left = 14.0
 	_label.offset_top = 14.0
 	_label.offset_right = 282.0
-	_label.offset_bottom = 342.0
+	_label.offset_bottom = 358.0
 	_label.add_theme_color_override("font_color", Color(0.35, 1.0, 0.35))
 	_label.add_theme_color_override("font_outline_color", Color(0, 0, 0))
 	_label.add_theme_constant_override("outline_size", 2)

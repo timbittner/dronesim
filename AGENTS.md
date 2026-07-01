@@ -6,9 +6,10 @@ A 3D drone flight simulator built in Godot 4.7 / GDScript. Started as a
 vibe-coding playground with the intent to iterate into a drone swarm simulator
 with realistic flight physics, autonomous routing, weather, and threat simulation.
 
-**Current phase:** Per-rotor thrust vectoring complete. Both acro and stabilized
-modes use individual rotor forces applied at each arm position. See
-`PROJECT_SUMMARY.md` for detailed architecture and tuning parameters.
+**Current phase:** Per-rotor thrust vectoring complete, plus assisted flight
+modes (altitude hold + brake). Both acro and stabilized modes use individual
+rotor forces applied at each arm position. See `PROJECT_SUMMARY.md` for
+detailed architecture and tuning parameters.
 
 ## Tech Stack
 
@@ -37,6 +38,7 @@ scripts/
     flight_mode_base.gd          Abstract base — FlightControl, RotorMix
     flight_mode_acro.gd          Direct differential mapping
     flight_mode_stabilized.gd    PD auto-level + rate mode
+    flight_mode_altitude_hold.gd Post-compute collective filter (not a mode)
     drone_body_mesh.gd           Procedural rhombic body (RETIRED — superseded
                                  by drone_body.glb; kept for reference only)
     debug_axes.gd                RGB orientation arrows
@@ -167,8 +169,22 @@ The `_rotor_positions` array order is `[FL, FR, BL, BR]` and the mixer output
 | Left | Left/Right | Yaw (rotate) |
 | Right | Up/Down | Pitch (forward/back) |
 | Right | Left/Right | Roll (tilt left/right) |
-| L1 | Press | Switch flight mode |
-| R1 | Hold | Toggle FPV camera |
+| L1 | Press | Toggle flight mode (acro ↔ stabilized) |
+| R1 | Press | Toggle FPV camera |
+| L2 | Hold (analog) | Altitude hold — replaces collective with a PD hover hold; pitch/roll/yaw pass through |
+| R2 | Hold (analog) | Brake — tilts the airframe via rotor thrust to oppose horizontal velocity (adds to, doesn't override, pitch/roll from stick/mode); composes with altitude hold (brake = horizontal, altitude hold = vertical) |
+| Triangle | Press | Reset drone |
+
+Keyboard fallback: Shift = altitude_hold, Ctrl = brake_mode (see other actions'
+keyboard bindings in `project.godot`).
+
+**L2/R2 are analog axes, not buttons.** In Godot's abstracted joypad model,
+L2/R2 report as `InputEventJoypadMotion` on axis 4/5 (SDL `TRIGGER_LEFT`/
+`TRIGGER_RIGHT`), not `InputEventJoypadButton`. Binding them as
+`button_index` 6/7 (as an earlier draft of this project did) silently binds
+to Start/L3-click instead — the action never fires on a real controller, with
+no error. If a future trigger-based action seems to do nothing despite a
+correct-looking `project.godot` entry, check this first.
 
 ## Known Issues
 
@@ -199,6 +215,25 @@ The `_rotor_positions` array order is `[FL, FR, BL, BR]` and the mixer output
   sluggish/resistant response. Likely fix: use two separate filtered signals
   — heavily-filtered for auto-level's D-term (noise rejection), raw or
   lightly-filtered for rate-mode's feedback (responsiveness).
+- **`reset_drone` (Triangle) sometimes needs a held press, not a tap**
+  (`project.godot`, `drone_controller.gd`): investigated for Tim — ruled out
+  the "event consumed elsewhere" theory (grepped the whole project: the only
+  `_unhandled_input` handler is in `drone_controller.gd`, and no `Control`
+  node grabs focus, so nothing upstream can be swallowing the event).
+  Leading theory is deadzone-related: Apple's GameController framework (macOS
+  DualSense driver) reports even digital face buttons with an analog
+  `.value`, which Godot likely surfaces as `pressure` on
+  `InputEventJoypadButton`; the action's `deadzone: 0.5` gated
+  `is_action_pressed()` on that pressure crossing 0.5, so a very quick tap
+  that releases before the reported value ramps past 0.5 never registers as
+  "pressed" at all. Mitigated two ways: lowered `reset_drone`'s deadzone to
+  0.2 (still filters noise-floor values but tolerates a much lighter/quicker
+  press), and added an `Input.is_action_just_pressed("reset_drone")` poll in
+  `_physics_process` alongside the existing `_unhandled_input` edge trigger,
+  so a missed discrete event still gets caught the next physics tick
+  (`reset()` is idempotent, so double-firing in one frame is harmless). Not
+  independently confirmed against real hardware since this requires the
+  physical DualSense — report back if it still needs a hold after this fix.
 
 ## License
 

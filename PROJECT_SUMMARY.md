@@ -4,8 +4,9 @@ A 3D drone flight simulator in **Godot 4.7 / GDScript** with **Jolt Physics**.
 Single drone, flyable with a PS5 DualSense controller. Procedural terrain,
 chase/FPV cameras, debug HUD.
 
-Current phase: **Per-rotor thrust vectoring complete** — both acro and stabilized
-modes use individual rotor forces applied at each arm position. 10 headless tests pass.
+Current phase: **Per-rotor thrust vectoring complete**, plus **Phase B assisted
+flight modes** (altitude hold + brake) — both acro and stabilized modes use
+individual rotor forces applied at each arm position. 12 headless tests pass.
 
 ---
 
@@ -42,16 +43,16 @@ DroneController._mix_rotors()  →  RotorMix(fl, fr, bl, br)  ← anti-clip scal
 Physics: apply_force() at 4 rotor positions + apply_torque() for yaw
 ```
 
-### `scripts/drone/drone_controller.gd` — Core Controller (185 lines)
+### `scripts/drone/drone_controller.gd` — Core Controller
 
 `DroneController extends RigidBody3D`. Physics loop:
 ```
-_read_inputs()           → reads 4 axes from InputMap
-_compute_and_apply_forces(delta)  → mode → mixer → rotor forces + yaw torque
+_read_inputs()           → reads 4 axes + altitude_hold/brake_mode from InputMap
+_compute_and_apply_forces(delta)  → mode → altitude-hold filter → brake tilt add-on → mixer → rotor forces + yaw torque
 _apply_angular_damping() → per-axis damping (0.08 pitch/roll, 1.0 yaw)
 ```
 
-Hover throttle per-rotor: `(mass * gravity) / (4 * max_thrust)` = 0.098.
+Hover throttle per-rotor: `(mass * gravity) / (4 * max_thrust)`.
 
 Static `_mix_rotors(collective, pitch, roll)` handles anti-clip scaling and
 MIN_ROTOR (0.02) protection. Early-returns all zeros if collective < 0.001
@@ -85,6 +86,44 @@ Two sub-modes:
   full at 1.5° to prevent limit-cycle jitter. D gain (4.0) always active.
   `stabilize_p_gain = 15.0`, `stabilize_d_gain = 4.0`.
 
+### `scripts/drone/flight_mode_altitude_hold.gd` — Altitude Hold (assist, not a mode)
+
+`FlightModeAltitudeHold extends RefCounted`. Not selectable like acro/stabilized —
+`DroneController` calls `update()` after the active mode's `compute()` and, while
+`altitude_hold` (L2 / Shift) is held, replaces `control.collective` wholesale with
+classic PD-on-altitude: `hover_throttle + P * (target_altitude - current_y) -
+D * linear_velocity.y`, target altitude captured on engage. Pitch/roll/yaw pass
+through untouched. On release, blends from the last hold collective back to the
+pilot's live collective over 0.3s (internal state machine: IDLE → HOLDING →
+BLENDING → IDLE).
+
+An earlier version instead did P on velocity-error (target rate = 0) with a
+finite-differenced "acceleration" D-term (RigidBody3D has no acceleration
+signal). Dividing that finite difference by the ~1/60s physics delta amplified
+per-tick noise ~20x, causing a bang-bang oscillation between 0% and ~50%
+thrust (visible as HUD throttle flicker and the prop mesh flipping between
+idle/spin-disc every frame). PD-on-altitude needs no differentiation at all —
+`linear_velocity.y` is already the natural derivative of altitude — so this
+class of instability can't happen, and it holds the engaged altitude against
+disturbance rather than merely zeroing climb rate wherever the drone is.
+
+### `scripts/drone/brake_assist.gd` — Brake (assist, not a mode, not a magic force)
+
+`BrakeAssist extends RefCounted`. Rotor-thrust-only — no `apply_central_force`
+shortcut. While `brake_mode` (R2 / Ctrl) is held, computes the horizontal
+deceleration needed (`-horizontal_vel / brake_time`), converts it to a target
+airframe tilt via the small-angle relation `a ≈ g·tan(θ)` (solved with
+`atan2` so it saturates instead of diverging, clamped to `max_tilt_deg`), then
+reuses stabilized mode's exact auto-level technique — restoring torque from
+`body_up.cross(target_up)` — pointed at that tilted target instead of literal
+world-up. This reuses the already-tested pitch/roll sign conventions instead
+of re-deriving them. The resulting `(pitch_diff, roll_diff)` is **added** to
+whatever the active flight mode already computed (blends with pilot stick
+input and stabilized's own auto-level, doesn't override them — the drone
+brakes by tilting into the wind and letting real rotor thrust do the work,
+same as a real quad). Vertical velocity untouched; composes with altitude
+hold (brake owns horizontal, altitude hold owns vertical).
+
 ### `scripts/camera/chase_camera.gd` — Camera
 
 Two modes:
@@ -95,12 +134,13 @@ Two modes:
 
 ### `scripts/ui/debug_hud.gd` — Telemetry HUD
 
-On-screen overlay: flight mode, FPV status, throttle %, stick inputs,
-heading/pitch/roll angles, speed, altitude. Compact log every 60 frames.
+On-screen overlay: flight mode, FPV status, altitude-hold/brake assist
+indicators, throttle %, stick inputs, heading/pitch/roll angles, speed,
+altitude. Compact log every 60 frames.
 
-### `scripts/test/flight_mode_test.gd` — Headless Test Harness (330 lines)
+### `scripts/test/flight_mode_test.gd` — Headless Test Harness
 
-10 tests using `Input.action_press/release` + `await get_tree().physics_frame`:
+12 tests using `Input.action_press/release` + `await get_tree().physics_frame`:
 
 | Test | Input | Verification |
 |---|---|---|
@@ -114,8 +154,11 @@ heading/pitch/roll angles, speed, altitude. Compact log every 60 frames.
 | Stabilized levels pitch | 15% pitch, 15 ticks + 300 settle | |pitch| < 5° |
 | Stabilized levels roll | 15% roll, 15 ticks + 300 settle | |roll| < 5° |
 | Roll→yaw coupling | 60% roll + 30% throttle, 30 ticks | heading delta < 45° |
+| Altitude hold | Engage at 500m with -3 m/s sink, 200 ticks | Within 0.5m of engage altitude, |vel| < 1 m/s |
+| Brake | Inject (5, 0, 3) m/s, brake 180 ticks (~3s, tilt-based) | Speed < 50% of initial |
 
 Run: `godot --headless --path . scenes/test/flight_mode_test_scene.tscn`
+(or `./run_tests.sh`)
 
 ---
 
@@ -159,6 +202,13 @@ tail (+Z). The full canonical table (with the mixer sign rationale) lives in
 
 Toggle with L1/R1.
 
+**Assists** (compose with either mode, held not toggled): altitude hold
+(L2/Shift) replaces collective with a PD hover hold; brake (R2/Ctrl) adds a
+rotor-thrust tilt on top of whatever pitch/roll the mode already commands, to
+oppose horizontal velocity — no out-of-band forces, blends with pilot input
+rather than overriding it. Both can be held together — brake owns horizontal,
+altitude hold owns vertical.
+
 ---
 
 ## Input Map
@@ -171,9 +221,17 @@ Toggle with L1/R1.
 | roll_left / roll_right | Right stick X | Left / Right |
 | toggle_flight_mode | L1 (button 9) | M |
 | toggle_fpv | R1 (button 10) | C |
+| altitude_hold (hold) | L2 (axis 4, analog trigger) | Shift |
+| brake_mode (hold) | R2 (axis 5, analog trigger) | Ctrl |
 | reset_drone | Triangle (button 3) | R |
 
 Mode 2 layout: left stick = throttle + yaw, right stick = pitch + roll.
+L2/R2 are held-trigger assists (altitude hold / brake), not toggles. L2/R2 are
+analog **axis** events (`InputEventJoypadMotion`, axis 4/5 = SDL
+TRIGGER_LEFT/TRIGGER_RIGHT), not button events — an earlier version of this
+binding incorrectly used `InputEventJoypadButton` with `button_index` 6/7,
+which in Godot's abstracted `JoyButton` enum are Start and L3-click, not the
+triggers, so the actions never fired on a real controller.
 
 ---
 
@@ -184,6 +242,10 @@ Mode 2 layout: left stick = throttle + yaw, right stick = pitch + roll.
   filtering on gyro measurement (vs on error) to fully eliminate.
 - **Roll→yaw coupling during aggressive dives:** Brief yaw deflection when
   pitching aggressively at high throttle. Not compensated — real physics effect.
+- **`reset_drone` occasionally needs a held press, not a tap:** mitigated
+  (lower deadzone + physics-tick polling fallback) but not yet confirmed
+  fixed against real hardware. See AGENTS.md "Known Issues" for the full
+  writeup.
 
 ---
 
@@ -205,3 +267,10 @@ Mode 2 layout: left stick = throttle + yaw, right stick = pitch + roll.
 | Stab input deadzone | flight_mode_stabilized.gd | 0.05 |
 | Stab angle deadzone | flight_mode_stabilized.gd | 1.5° (blended) |
 | FPV rotation smoothing | chase_camera.gd | 0.92 |
+| Altitude hold P gain | flight_mode_altitude_hold.gd | 0.15 |
+| Altitude hold D gain | flight_mode_altitude_hold.gd | 0.3 |
+| Altitude hold release blend time | flight_mode_altitude_hold.gd | 0.3 s |
+| Brake P gain | brake_assist.gd | 6.0 |
+| Brake D gain | brake_assist.gd | 1.5 |
+| Brake max tilt | brake_assist.gd | 25° |
+| Brake time constant | brake_assist.gd | 1.0 s |

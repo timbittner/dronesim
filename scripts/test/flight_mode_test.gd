@@ -38,6 +38,8 @@ func _reset_drone() -> void:
 	Input.action_release("pitch_backward")
 	Input.action_release("roll_left")
 	Input.action_release("roll_right")
+	Input.action_release("altitude_hold")
+	Input.action_release("brake_mode")
 	# Default flight mode - stabilized
 	if _drone._flight_mode != "stabilized":
 		_drone._flight_mode = "stabilized"
@@ -88,6 +90,10 @@ func _run_all_tests() -> void:
 
 	# Roll→yaw coupling test
 	await _run_test("test_stabilized_roll_does_not_induce_yaw_spin")
+
+	# Assisted flight modes (Phase B)
+	await _run_test("test_altitude_hold_maintains_altitude")
+	await _run_test("test_brake_kills_horizontal_velocity")
 
 	var total := _passed + _failed
 	print("[TEST] ========================================")
@@ -385,3 +391,53 @@ static func _normalize_angle(deg: float) -> float:
 	while deg < -180.0:
 		deg += 360.0
 	return deg
+
+
+# ---------------------------------------------------------------------------
+# Test: Altitude hold maintains altitude within 0.5m over 200 ticks
+# ---------------------------------------------------------------------------
+func test_altitude_hold_maintains_altitude() -> bool:
+	print("[TEST] --- test_altitude_hold_maintains_altitude ---")
+	_reset_drone()
+
+	# Inject a real disturbance (sinking at 3 m/s) so this actually exercises
+	# the PD loop's disturbance rejection, not just "zero error stays zero."
+	_drone.linear_velocity.y = -3.0
+	var initial_alt: float = _drone.global_position.y
+	Input.action_press("altitude_hold", 1.0)
+	await _run_ticks(200)
+	Input.action_release("altitude_hold")
+
+	var final_alt: float = _drone.global_position.y
+	var final_vel: float = _drone.linear_velocity.y
+	var delta_alt: float = absf(final_alt - initial_alt)
+	print("[TEST] Initial alt: ", initial_alt, " Final alt: ", final_alt, " delta: ", delta_alt, " final_vel: ", final_vel)
+
+	var passed: bool = delta_alt < 0.5 and absf(final_vel) < 1.0
+	print("[TEST] ", "PASS" if passed else "FAIL", " — delta_alt=", delta_alt, "m, final_vel=", final_vel, " m/s (expected delta < 0.5m, |vel| < 1.0 m/s)")
+	return passed
+
+
+# ---------------------------------------------------------------------------
+# Test: Brake mode reduces horizontal velocity via rotor-thrust tilt
+# ---------------------------------------------------------------------------
+func test_brake_kills_horizontal_velocity() -> bool:
+	print("[TEST] --- test_brake_kills_horizontal_velocity ---")
+	_reset_drone()
+	# Stabilized mode (default after reset) holds hover collective so there's
+	# real thrust for the brake tilt to redirect — brake is rotor-thrust-only,
+	# not a magic force, so it needs actual thrust to work with.
+
+	_drone.linear_velocity = Vector3(5.0, 0.0, 3.0)
+	var initial_horiz: float = Vector2(_drone.linear_velocity.x, _drone.linear_velocity.z).length()
+
+	Input.action_press("brake_mode", 1.0)
+	await _run_ticks(180)  # ~3s — tilt has to build up via rotation first
+	Input.action_release("brake_mode")
+
+	var final_horiz: float = Vector2(_drone.linear_velocity.x, _drone.linear_velocity.z).length()
+	print("[TEST] Initial horiz speed: ", initial_horiz, " Final: ", final_horiz)
+
+	var passed: bool = final_horiz < initial_horiz * 0.5
+	print("[TEST] ", "PASS" if passed else "FAIL", " — final_horiz=", final_horiz, " m/s (expected < 50% of initial after ~3s of tilt-braking)")
+	return passed

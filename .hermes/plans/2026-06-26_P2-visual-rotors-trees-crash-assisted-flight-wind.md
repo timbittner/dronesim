@@ -12,7 +12,12 @@ heavy physics phase in a row.
 
 ---
 
-## Phase A — Visual Breather (Trees, Rotors, Terrain)
+## Phase A — Visual Breather (Trees, Rotors, Terrain) — ✅ DONE
+
+Landed in `97ab761`, `c46c5d7`, `6bbbeee`, `0fd69d7`, `1ea1589`. Trees/rocks
+stay decorative — no dedicated tree/rock collision bodies; Godot's terrain
+`StaticBody3D` collision layer already covers crash detection for Phase C.
+Add collision to foliage later only if a specific case demands it.
 
 ### A-1 Fix documentation: FPV toggle is on R1, not R2
 
@@ -81,21 +86,54 @@ Tune:
 
 ---
 
-## Phase B — Assisted Flight Modes (Altitude Hold + Brake)
+## Phase B — Assisted Flight Modes (Altitude Hold + Brake) — ✅ DONE
+
+Altitude hold (`flight_mode_altitude_hold.gd`) implemented per the
+clarifications below: full collective replacement (not blended with the
+mode's own math), world-frame `linear_velocity.y`, finite-differenced
+filtered velocity for the D-term, and a real engaged-flag + blend-timer state
+machine for the 0.3s release blend. HUD shows ALT HOLD / BRAKE. 12 headless
+tests pass (10 existing + 2 new: altitude-hold-maintains-altitude,
+brake-kills-horizontal-velocity).
+
+**Post-landing fixes from real-controller testing:**
+- **B-1 had a real bug:** L2/R2 were bound as `InputEventJoypadButton` with
+  `button_index` 6/7. In Godot's abstracted `JoyButton` enum those are Start
+  and L3-click, not the triggers — the actions never fired on a real
+  DualSense (keyboard Shift/Ctrl worked fine, masking the bug in solo
+  testing). L2/R2 are analog **axes** (`InputEventJoypadMotion`, axis 4/5 =
+  SDL `TRIGGER_LEFT`/`TRIGGER_RIGHT`), same event type sticks already use.
+  Fixed in `project.godot`.
+- **B-3 was redesigned:** the original brake used `apply_central_force` — an
+  out-of-band force with no relation to rotor thrust, violating the sim's
+  "only the 4 motors" principle (flagged by Tim). Replaced with
+  `brake_assist.gd`: computes a target airframe tilt from the desired
+  horizontal deceleration (`a ≈ g·tan(θ)`) and reuses stabilized mode's
+  auto-level restoring-torque technique pointed at that tilted target instead
+  of world-up — same rotor-thrust-only mechanism pitch/roll always uses. Adds
+  to (blends with) the active mode's own pitch/roll output rather than
+  overriding it, per Tim's choice of "blend with stick" over "full override."
 
 ### B-1 Rebind inputs for new modes
 
 **Files:** `project.godot`, `scripts/drone/drone_controller.gd`
 
 New InputMap actions needed:
-- `altitude_hold` → L2 (button_index 6, analog trigger) — hold to engage
-- `brake_mode` → R2 (button_index 7, analog trigger) — hold to engage
+- `altitude_hold` → L2 (axis 4, `InputEventJoypadMotion`) — hold to engage
+- `brake_mode` → R2 (axis 5, `InputEventJoypadMotion`) — hold to engage
 
-Note: L2 and R2 are analog triggers (axis values), so use
-`Input.get_action_strength("altitude_hold")` to get 0.0–1.0 press depth.
-Engage when > 0.5.
+Note: L2 and R2 are analog triggers reported as **axis** events (SDL
+`TRIGGER_LEFT`/`TRIGGER_RIGHT`), the same event type the sticks already use —
+not `InputEventJoypadButton`. Use `Input.get_action_strength("altitude_hold")`
+to get 0.0–1.0 press depth. Engage when > 0.5.
 
 Currently R2 (button_index 10) was `toggle_fpv` — that moves to R1.
+
+**Keyboard fallback required.** Every existing action in `project.godot` has
+a keyboard event alongside the joypad one (see `throttle_up`, `toggle_fpv`,
+etc.) — `altitude_hold`/`brake_mode` need the same so keyboard-only testing
+still works. Default to **Shift** (altitude_hold) / **Ctrl** (brake_mode); no
+conflict with existing WASD/arrow/M/C/R bindings.
 
 **New controller layout:**
 
@@ -133,14 +171,55 @@ Alternative: make it a new flight mode that toggles like acro/stabilized.
 But Tim said L2 is a "hold trigger" — so it's momentary. So it's a
 modifier on any existing mode. The filter approach is better.
 
+**Implementation clarifications (resolve before coding):**
+
+- **Full replacement, not a blend with the mode's own collective.** Acro's
+  `collective` bakes in an idle-throttle floor (`flight_mode_acro.gd`'s
+  `idle_throttle = 0.08`); stabilized's doesn't share that shape. Altitude
+  hold must replace `control.collective` entirely with
+  `hover_throttle + P * error - D_term`, where `hover_throttle` is the
+  value already computed once in `drone_controller.gd:79`
+  ((mass * gravity) / (4 * max_thrust)) — not derive a new baseline from
+  whichever mode is active.
+- **Use world-frame `linear_velocity.y`** for the vertical error, not a
+  basis-transformed value — gravity/altitude are always world-Y regardless
+  of drone tilt.
+- **No acceleration signal exists.** RigidBody3D doesn't expose
+  acceleration directly. Store the previous frame's vertical velocity (or
+  error) on the new class and take a finite difference for the D-term —
+  same pattern `flight_mode_stabilized.gd` already uses for its filtered
+  gyro D-term (reuse that shape rather than inventing a new one).
+- **Release blend needs actual state**, not just a comment: store an
+  `_engaged` flag and a blend timer; on release, lerp from the
+  last-computed altitude-hold collective to the pilot's live mode collective
+  over 0.3s, then hand control back fully.
+
 ### B-3 Brake / hover mode
 
-**Files:** `scripts/drone/drone_controller.gd`
+**Files:** `scripts/drone/brake_assist.gd` (new), `scripts/drone/drone_controller.gd`
 
-On R2 hold:
-- Compute horizontal velocity (x,z components of `linear_velocity`)
-- Apply opposing force scaled by `mass * horizontal_vel / brake_time`
-  where `brake_time ≈ 1.0s` (tune for feel)
+**Rewritten after first landing:** the original design ("apply opposing force
+scaled by `mass * horizontal_vel / brake_time`" via `apply_central_force`)
+was an out-of-band force with no relation to rotor thrust — it violates the
+sim's core principle that the drone can only be controlled through its 4
+motors. Real fix, `BrakeAssist` (`RefCounted`, same "filter stage" shape as
+`FlightModeAltitudeHold`):
+
+- Compute horizontal velocity (x, z components of `linear_velocity`)
+- Desired deceleration: `-horizontal_vel / brake_time` (`brake_time ≈ 1.0s`)
+- Convert desired deceleration to a target airframe tilt angle via
+  `atan2(accel_mag, gravity)` (small-angle `a ≈ g·tan(θ)`, `atan2` so it
+  saturates instead of diverging), clamped to `max_tilt_deg` (25°)
+- Build `target_up` = world-up rotated toward the deceleration direction by
+  that tilt angle, then reuse `flight_mode_stabilized.gd`'s exact auto-level
+  technique — restoring torque from `body_up.cross(target_up)` — pointed at
+  `target_up` instead of literal world-up. This reuses the already-tested
+  pitch/roll sign conventions instead of re-deriving them by hand.
+- The resulting `(pitch_diff, roll_diff)` is **added** to whatever the active
+  mode already computed — blends with pilot stick input and with
+  stabilized's own auto-level (per Tim's choice of "blend with stick" over
+  "full override"), rather than taking over pitch/roll entirely. Real quads
+  brake this way: nose up / bank to redirect thrust, not a magic force.
 - Do NOT touch vertical velocity (Y) — pilot controls climb/descent,
   or altitude hold handles it if also active
 - If vertical velocity is also held AND both L2+R2 are pressed, brake
@@ -163,18 +242,35 @@ Add to telemetry display:
 
 No new collision shapes needed — `Drone extends RigidBody3D` with
 `BoxShape3D` collision and terrain has a `StaticBody3D`. Godot already
-fires `body_entered` / `body_exited` signals.
+fires `body_entered` / `body_exited` signals — **but only if contact
+monitoring is enabled.**
+
+**Required setup gap:** `drone.tscn` currently has `contact_monitor` unset
+(defaults to `false`) and `max_contacts_reported = 0`. Without setting
+`contact_monitor = true` and `max_contacts_reported` to at least 4,
+`body_entered` will never fire. Easy to miss since the plan text says "no
+new collision shapes needed" — true, but this property still has to be set.
 
 Connect signal in `DroneController._ready()`:
 - `body_entered.connect(_on_collision)`
 
 In `_on_collision(body)`:
+- **Guard first:** if `linear_velocity.length()` is below a small epsilon
+  (e.g. `0.05`), return without evaluating angle/momentum at all.
+  `linear_velocity.normalized()` on a near-zero vector is undefined, and
+  this also naturally covers the drone resting on the spawn pad (at rest,
+  contact fires but there's no meaningful velocity to crash on).
 - Compute impact angle: angle between `linear_velocity.normalized()` and
   the collision normal
-- Compute impact momentum: `linear_velocity.length() * mass`
-- If angle > threshold (glancing blow) AND momentum low → bounce (no-op,
-  physics handles it)
-- If angle < threshold (direct hit) OR momentum high → crash
+- Compute impact momentum: `linear_velocity.length() * mass` (mass = 2.0,
+  see `drone.tscn:10` — a sensible starting threshold is ~6 kg·m/s, i.e. a
+  ~3 m/s impact; expose as `@export` so it's tunable without a code change)
+- **Corrected logic — this was backwards in the original draft:** crash
+  requires **momentum high AND angle direct** (small angle to the surface
+  normal), not "OR". The original "OR" would crash on a slow graze at a bad
+  angle, and would crash on literally any contact once the zero-velocity
+  guard above is added (since angle-direct-but-zero-momentum would still
+  satisfy the OR). Bounce (no-op) is everything else.
 
 ### C-2 Signal loss state machine
 
@@ -192,6 +288,27 @@ When crash triggers:
 When `reset()` is called (Triangle pressed):
 1. Reset to spawn, set state to `FLYING`
 2. Clear the signal lost indicator
+
+**Known reliability issue — investigated early, during Phase B, at Tim's
+request:** `reset_drone` (Triangle) sometimes doesn't trigger on a quick tap
+— needs the button held for about a second to register. Findings:
+- Ruled out "swallowed elsewhere": grepped the whole project — the only
+  `_unhandled_input` handler is in `drone_controller.gd`, and no `Control`
+  node grabs focus, so nothing upstream can consume the event first.
+- Leading theory: Apple's GameController framework (macOS DualSense driver)
+  reports even digital face buttons with an analog `.value`, which Godot
+  likely surfaces as `pressure` on `InputEventJoypadButton`. The action's
+  old `deadzone: 0.5` gated `is_action_pressed()` on that pressure crossing
+  0.5, so a quick tap that releases before the value ramps past 0.5 never
+  registers as "pressed" — not independently confirmed against real
+  hardware, since that requires the physical controller.
+- **Mitigated:** lowered `reset_drone`'s deadzone to 0.2 in `project.godot`
+  (still filters real noise-floor values, tolerates a lighter/quicker press),
+  and added the suggested `Input.is_action_just_pressed("reset_drone")` poll
+  in `_physics_process` alongside the existing `_unhandled_input` edge
+  trigger (`reset()` is idempotent, so double-firing in one frame is
+  harmless). Documented in AGENTS.md "Known Issues" — **needs a hardware
+  retest to confirm this fully resolves it, not just probably helps.**
 
 While CRASHED:
 - `_read_inputs` and `_compute_and_apply_forces` are skipped
@@ -262,9 +379,9 @@ Wind gets stronger with altitude (realistic):
 
 ## Open Questions
 
-1. **Trees on terrain collision:** Currently trees would be visual-only.
-   Add collision later for crash detection? Or keep them purely decorative
-   and use only terrain collision for crashes?
+1. ~~**Trees on terrain collision**~~ — Resolved: trees/rocks stay decorative,
+   crash detection uses terrain's physics layer only. Revisit if a specific
+   gameplay case needs foliage collision.
 
 2. **Altitude hold engagement:** Capture altitude on button press. What if
    you press L2 while still at 0 throttle on the ground? Should it
@@ -287,12 +404,10 @@ Wind gets stronger with altitude (realistic):
 
 Each phase should have verifiable tests:
 
-**Phase A (visual):**
-- Launch game, visually confirm rotors spin when throttle > 0
-- Confirm trees/rocks scattered across terrain
-- Confirm terrain has color variation
+**Phase A (visual):** ✅ done — rotors spin, trees/rocks scattered, terrain
+color variation confirmed.
 
-**Phase B (flight modes):**
+**Phase B (flight modes):** ✅ done
 - Headless tests: altitude hold maintains altitude within 0.5m over 200 frames
 - Headless test: brake mode kills horizontal velocity within 1s
 - HUD shows ALT HOLD / BRAKE
@@ -309,19 +424,37 @@ Each phase should have verifiable tests:
 
 ## Execution Order
 
-1. Phase A-1 (doc fix) — 5 min
-2. Phase A-2 (rotor visual) — 15 min
-3. Phase A-3 (trees/rocks) — 30 min
-4. Phase A-4 (terrain color) — 15 min
-5. Phase A-5 (sky/lighting) — 10 min
-6. Phase B-1 (input rebind) — 10 min
-7. Phase B-2 (altitude hold) — 30 min
-8. Phase B-3 (brake mode) — 20 min
-9. Phase B-4 (HUD indicators) — 10 min
+1. ~~Phase A-1 (doc fix)~~ — done
+2. ~~Phase A-2 (rotor visual)~~ — done
+3. ~~Phase A-3 (trees/rocks)~~ — done
+4. ~~Phase A-4 (terrain color)~~ — done
+5. ~~Phase A-5 (sky/lighting)~~ — done
+6. ~~Phase B-1 (input rebind)~~ — done
+7. ~~Phase B-2 (altitude hold)~~ — done
+8. ~~Phase B-3 (brake mode)~~ — done
+9. ~~Phase B-4 (HUD indicators)~~ — done
 10. Phase C-1 + C-2 (crash detection + state machine) — 25 min
 11. Phase C-3 (signal lost HUD) — 15 min
 12. Phase D-1 (wind system) — 25 min
 13. Phase D-2 (wind viz) — 20 min
 14. Phase D-3 (altitude wind) — 10 min
 
-Estimated total: ~4h of focused work.
+Estimated remaining: ~1.5h of focused work (Phases C–D).
+
+---
+
+## Post-P2 direction (parking lot, not scheduled)
+
+Notes from discussion after P2 planning, for whenever a P3 doc gets drafted:
+
+- **Swarm vs. deeper physics** — open fork, not yet decided. Scene is already
+  built to instance `Drone` for swarm later (see AGENTS.md).
+- **PID fine-tuning** — open, ongoing; see `AGENTS.md` → Known Issues for the
+  current stabilized-mode jitter/stickiness writeup.
+- **Sound simulation** — floated, but Tim is skeptical it's more than a gimmick.
+  Low priority.
+- **Weather** — Tim is skeptical beyond the wind already scoped in Phase D.
+  Don't expand this without a concrete driver.
+- **Doxygen-style docs** — wanted, so the codebase is self-explanatory at a
+  glance. Good candidate for the "documentation after P2" pass already agreed
+  on.

@@ -15,6 +15,13 @@ signal fpv_toggled(enabled: bool)
 # Per-rotor hover throttle: (mass * gravity) / (4 * max_thrust)
 var hover_throttle: float = 0.0
 
+# --- Assisted flight modes (altitude hold + brake) ---
+var _altitude_hold: FlightModeAltitudeHold = null
+var _brake: BrakeAssist = null
+var _altitude_hold_engaged: bool = false
+var _brake_engaged: bool = false
+var _gravity: float = 9.8
+
 # --- Angular damping ---
 ## Prevents spin-out. Yaw gets higher damping — roll maneuvers can induce
 ## yaw via natural thumb drift on the stick, and this keeps it in check.
@@ -75,8 +82,8 @@ func _ready() -> void:
 	angular_damp = 0.0
 	linear_damp = 0.5
 
-	var gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity")
-	hover_throttle = (mass * gravity) / (4.0 * max_thrust)
+	_gravity = ProjectSettings.get_setting("physics/3d/default_gravity")
+	hover_throttle = (mass * _gravity) / (4.0 * max_thrust)
 
 	var acro := FlightModeAcro.new()
 	_flight_modes["acro"] = acro
@@ -87,6 +94,12 @@ func _ready() -> void:
 	_flight_modes["stabilized"] = stabilized
 
 	_current_mode = _flight_modes[_flight_mode]
+
+	_altitude_hold = FlightModeAltitudeHold.new()
+	_altitude_hold.hover_throttle = hover_throttle
+
+	_brake = BrakeAssist.new()
+	_brake.max_thrust = max_thrust
 
 	_setup_visuals()
 
@@ -206,12 +219,23 @@ func _physics_process(delta: float) -> void:
 	_compute_and_apply_forces(delta)
 	_apply_angular_damping()
 
+	# Fallback alongside the _unhandled_input edge trigger below: on some
+	# controller/OS combinations a quick tap doesn't cross the action's
+	# strength threshold in time to register on its own input event (see
+	# AGENTS.md "Known Issues" for detail). Polling once per physics tick
+	# catches it a tick later even if the discrete event was missed.
+	# reset() is idempotent, so double-firing in the same frame is harmless.
+	if Input.is_action_just_pressed("reset_drone"):
+		reset()
+
 
 func _read_inputs() -> void:
 	_throttle_input = Input.get_action_strength("throttle_up") - Input.get_action_strength("throttle_down")
 	_yaw_input = Input.get_action_strength("yaw_right") - Input.get_action_strength("yaw_left")
 	_pitch_input = Input.get_action_strength("pitch_backward") - Input.get_action_strength("pitch_forward")
 	_roll_input = Input.get_action_strength("roll_right") - Input.get_action_strength("roll_left")
+	_altitude_hold_engaged = Input.get_action_strength("altitude_hold") > 0.5
+	_brake_engaged = Input.get_action_strength("brake_mode") > 0.5
 
 
 func _compute_and_apply_forces(delta: float) -> void:
@@ -222,6 +246,19 @@ func _compute_and_apply_forces(delta: float) -> void:
 		_throttle_input, _pitch_input, _roll_input, _yaw_input,
 		global_transform.basis, angular_velocity, delta
 	)
+
+	if _altitude_hold_engaged or _altitude_hold.is_active():
+		control.collective = _altitude_hold.update(
+			_altitude_hold_engaged, global_position.y, linear_velocity.y, control.collective, delta
+		)
+
+	if _brake_engaged:
+		var horizontal_vel := Vector3(linear_velocity.x, 0.0, linear_velocity.z)
+		var brake_offset: Vector2 = _brake.compute(
+			horizontal_vel, global_transform.basis, angular_velocity, _gravity
+		)
+		control.pitch_diff += brake_offset.x
+		control.roll_diff += brake_offset.y
 
 	var mix := _mix_rotors(control.collective, control.pitch_diff, control.roll_diff)
 	thrust_percent = (mix.fl + mix.fr + mix.bl + mix.br) * 0.25 * 100.0
