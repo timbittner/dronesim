@@ -33,6 +33,14 @@ var _gizmo_panel: ColorRect
 var _gizmo_canvas: Control
 var _coord_label: Label
 
+# Wind arrow (top-right, below the gizmo)
+var _wind_panel: ColorRect
+var _wind_canvas: Control
+var _wind_label: Label
+## Last stable on-screen wind direction — see _on_wind_draw for why this is
+## cached instead of renormalized every frame.
+var _wind_arrow_dir: Vector2 = Vector2.RIGHT
+
 # Cached font for _draw_string
 var _gizmo_font: Font
 var _gizmo_font_size: int = 14
@@ -70,8 +78,13 @@ func _process(delta: float) -> void:
 	var pos: Vector3 = _drone.global_position
 	_coord_label.text = "X %+7.2f  Y %+7.2f  Z %+7.2f" % [pos.x, pos.y, pos.z]
 
-	# Redraw axis gizmo every frame
+	# Wind readout (ambient wind sampled at the drone, not the drag force)
+	var wind_speed: float = _drone.wind_velocity.length()
+	_wind_label.text = "WIND CALM" if wind_speed < 0.3 else "WIND %.1f m/s" % wind_speed
+
+	# Redraw axis gizmo + wind arrow every frame
 	_gizmo_canvas.queue_redraw()
+	_wind_canvas.queue_redraw()
 
 	_frame_count += 1
 	if _frame_count >= print_interval:
@@ -94,6 +107,7 @@ func _on_crash_detected() -> void:
 	_pulse_time = 0.0
 	_signal_lost_label.visible = true
 	_label.modulate.a = 0.35
+	_wind_panel.modulate.a = 0.35
 	_update_dead_feed_visibility()
 
 
@@ -120,6 +134,7 @@ func _update_crash_overlay(delta: float) -> void:
 		_frozen_frame = null
 		_feed_frozen.texture = null
 		_label.modulate.a = 1.0
+		_wind_panel.modulate.a = 1.0
 		_update_dead_feed_visibility()
 
 
@@ -261,6 +276,33 @@ func _build_ui() -> void:
 	_coord_label.text = "X    0.00  Y    0.00  Z    0.00"
 	_gizmo_panel.add_child(_coord_label)
 
+	# ——— Wind arrow panel (top-right, below the gizmo) ———
+	_wind_panel = ColorRect.new()
+	_wind_panel.color = Color(0.0, 0.0, 0.0, 0.65)
+	_wind_panel.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	_wind_panel.offset_left = -170.0
+	_wind_panel.offset_top = 140.0
+	_wind_panel.offset_right = -8.0
+	_wind_panel.offset_bottom = 240.0
+	add_child(_wind_panel)
+
+	_wind_canvas = Control.new()
+	_wind_canvas.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_wind_canvas.draw.connect(_on_wind_draw)
+	_wind_panel.add_child(_wind_canvas)
+
+	_wind_label = Label.new()
+	_wind_label.add_theme_font_size_override("font_size", 11)
+	_try_load_monospace_font(_wind_label)
+	_wind_label.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	_wind_label.offset_left = 6.0
+	_wind_label.offset_bottom = -6.0
+	_wind_label.add_theme_color_override("font_color", Color(0.35, 1.0, 0.35))
+	_wind_label.add_theme_color_override("font_outline_color", Color(0, 0, 0))
+	_wind_label.add_theme_constant_override("outline_size", 1)
+	_wind_label.text = "WIND CALM"
+	_wind_panel.add_child(_wind_label)
+
 	# ——— Centered SIGNAL LOST banner (added last = drawn on top) ———
 	_signal_lost_label = Label.new()
 	_signal_lost_label.text = "⚠ SIGNAL LOST"
@@ -317,6 +359,67 @@ func _on_gizmo_draw() -> void:
 
 	# Small dot at center
 	_gizmo_canvas.draw_circle(center, 2.0, Color(1, 1, 1, 0.6))
+
+
+## Draws a camera-relative arrow for the ambient wind at the drone's position
+## (same projection technique as _on_gizmo_draw): drone-relative in FPV,
+## intuitive in 3PV. Length + alpha scale with speed; near-calm shows a dim dot.
+func _on_wind_draw() -> void:
+	if _drone == null:
+		return
+	var cam := get_viewport().get_camera_3d()
+	if not cam or not is_instance_valid(cam):
+		return
+
+	var wind: Vector3 = _drone.wind_velocity
+	var speed: float = wind.length()
+
+	var panel_size := _wind_canvas.get_size()
+	var center := panel_size * Vector2(0.5, 0.45)
+
+	if speed < 0.3:
+		_wind_canvas.draw_circle(center, 5.0, Color(0.6, 0.85, 1.0, 0.5))
+		return
+
+	var cam_basis := cam.global_transform.basis.inverse()
+	var cam_local := cam_basis * wind
+	# The in-plane (screen-space) projection, NOT normalized: its magnitude is
+	# how much of the wind is visible sideways-on vs. pointing toward/away
+	# from the camera. Renormalizing this every frame is what caused the
+	# reported 180° flips — as wind points closer to the camera's forward
+	# axis, this vector shrinks toward zero, and a tiny gust or FPV rotation-
+	# smoothing wobble can flip a near-zero normalized vector by ~180° even
+	# though the real 3D wind direction barely changed. (Not gimbal lock —
+	# there's no Euler-angle math on this path — but a similar-flavored
+	# instability: a 3D→2D projection near its degenerate axis.) Fix: only
+	# update the displayed direction when the in-plane component is large
+	# enough to be meaningful; otherwise keep the last stable direction and
+	# let the arrow shrink toward the center dot instead of snapping.
+	var screen_vec := Vector2(cam_local.x, -cam_local.y)
+	var screen_speed := screen_vec.length()
+	if screen_speed > 0.15:
+		_wind_arrow_dir = screen_vec / screen_speed
+
+	var arrow_len: float = 16.0 + 46.0 * clampf(screen_speed / 8.0, 0.0, 1.0)
+	var alpha: float = smoothstep(0.3, 1.2, speed)
+	var color := Color(0.6, 0.85, 1.0, alpha)
+	var outline := Color(0.0, 0.0, 0.0, alpha * 0.9)
+
+	var tip := center + _wind_arrow_dir * arrow_len
+	var head_a := tip + _wind_arrow_dir.rotated(deg_to_rad(150.0)) * 18.0
+	var head_b := tip + _wind_arrow_dir.rotated(deg_to_rad(-150.0)) * 18.0
+	var segments := [[center, tip], [tip, head_a], [tip, head_b]]
+
+	# Bold: dark outline stroke first, colored stroke on top — reads clearly
+	# against any background (Wii Sports-style chunky meter, per feedback).
+	# Round joints (small filled circles at the tip) mask the notch that
+	# three unjoined draw_line segments otherwise leave at their shared vertex.
+	for seg in segments:
+		_wind_canvas.draw_line(seg[0], seg[1], outline, 9.0, false)
+	_wind_canvas.draw_circle(tip, 4.5, outline)
+	for seg in segments:
+		_wind_canvas.draw_line(seg[0], seg[1], color, 6.0, false)
+	_wind_canvas.draw_circle(tip, 3.0, color)
 
 
 func _try_load_monospace_font(label: Label) -> void:
