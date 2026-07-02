@@ -12,7 +12,6 @@ extends CanvasLayer
 var _drone: DroneController
 var _frame_count: int = 0
 
-# UI elements
 var _label: Label
 var _bg: ColorRect
 
@@ -28,12 +27,10 @@ var _frozen_frame: ImageTexture = null
 var _pulse_time: float = 0.0
 var _drone_connected: bool = false
 
-# Axis gizmo + coords (bottom-left)
 var _gizmo_panel: ColorRect
 var _gizmo_canvas: Control
 var _coord_label: Label
 
-# Wind arrow (top-right, below the gizmo)
 var _wind_panel: ColorRect
 var _wind_canvas: Control
 var _wind_label: Label
@@ -41,7 +38,6 @@ var _wind_label: Label
 ## cached instead of renormalized every frame.
 var _wind_arrow_dir: Vector2 = Vector2.RIGHT
 
-# Cached font for _draw_string
 var _gizmo_font: Font
 var _gizmo_font_size: int = 14
 
@@ -74,15 +70,13 @@ func _process(delta: float) -> void:
 	var telemetry: Dictionary = _gather_telemetry()
 	_label.text = _format_telemetry(telemetry)
 
-	# Update coordinates
 	var pos: Vector3 = _drone.global_position
 	_coord_label.text = "X %+7.2f  Y %+7.2f  Z %+7.2f" % [pos.x, pos.y, pos.z]
 
-	# Wind readout (ambient wind sampled at the drone, not the drag force)
+	# Ambient wind sampled at the drone, not the drag force applied to it.
 	var wind_speed: float = _drone.wind_velocity.length()
 	_wind_label.text = "WIND CALM" if wind_speed < 0.3 else "WIND %.1f m/s" % wind_speed
 
-	# Redraw axis gizmo + wind arrow every frame
 	_gizmo_canvas.queue_redraw()
 	_wind_canvas.queue_redraw()
 
@@ -91,10 +85,6 @@ func _process(delta: float) -> void:
 		_frame_count = 0
 		print("[HUD] %s" % _format_telemetry_compact(telemetry))
 
-
-# ---------------------------------------------------------------------------
-# Crash / signal-loss overlay
-# ---------------------------------------------------------------------------
 
 func _on_crash_detected() -> void:
 	# The feed is only being watched (and thus freezable) if the pilot was in
@@ -209,7 +199,7 @@ func _format_telemetry_compact(t: Dictionary) -> String:
 
 
 func _build_ui() -> void:
-	# ——— Dead-feed layer (added first = drawn under the telemetry panels) ———
+	# Dead-feed layer added first so it draws under the telemetry panels.
 	_feed_black = ColorRect.new()
 	_feed_black.color = Color.BLACK
 	_feed_black.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -223,7 +213,6 @@ func _build_ui() -> void:
 	_feed_frozen.visible = false
 	add_child(_feed_frozen)
 
-	# ——— Top-left telemetry panel ———
 	_bg = ColorRect.new()
 	_bg.color = Color(0.0, 0.0, 0.0, 0.65)
 	_bg.set_anchors_preset(Control.PRESET_TOP_LEFT)
@@ -247,7 +236,6 @@ func _build_ui() -> void:
 	_label.text = "Waiting for drone..."
 	add_child(_label)
 
-	# ——— Top-right axis gizmo + coords ———
 	_gizmo_panel = ColorRect.new()
 	_gizmo_panel.color = Color(0.0, 0.0, 0.0, 0.65)
 	_gizmo_panel.set_anchors_preset(Control.PRESET_TOP_RIGHT)
@@ -257,13 +245,11 @@ func _build_ui() -> void:
 	_gizmo_panel.offset_bottom = 110.0
 	add_child(_gizmo_panel)
 
-	# Custom Control that draws the axis cross
 	_gizmo_canvas = Control.new()
 	_gizmo_canvas.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_gizmo_canvas.draw.connect(_on_gizmo_draw)
 	_gizmo_panel.add_child(_gizmo_canvas)
 
-	# XYZ coordinate label below the gizmo
 	_coord_label = Label.new()
 	_coord_label.add_theme_font_size_override("font_size", 11)
 	_try_load_monospace_font(_coord_label)
@@ -276,7 +262,6 @@ func _build_ui() -> void:
 	_coord_label.text = "X    0.00  Y    0.00  Z    0.00"
 	_gizmo_panel.add_child(_coord_label)
 
-	# ——— Wind arrow panel (top-right, below the gizmo) ———
 	_wind_panel = ColorRect.new()
 	_wind_panel.color = Color(0.0, 0.0, 0.0, 0.65)
 	_wind_panel.set_anchors_preset(Control.PRESET_TOP_RIGHT)
@@ -303,7 +288,6 @@ func _build_ui() -> void:
 	_wind_label.text = "WIND CALM"
 	_wind_panel.add_child(_wind_label)
 
-	# ——— Centered SIGNAL LOST banner (added last = drawn on top) ———
 	_signal_lost_label = Label.new()
 	_signal_lost_label.text = "⚠ SIGNAL LOST"
 	_signal_lost_label.add_theme_font_size_override("font_size", 48)

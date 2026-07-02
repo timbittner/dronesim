@@ -49,26 +49,20 @@ func _create_axis_box(node_name: String, color: Color, direction: Vector3) -> Me
 	add_child(mi)
 	return mi
 
+## Positions and rotates a box (long axis = local X) so X aligns with one of
+## the three fixed world axes this is ever called with, centered at half_length
+## along that axis. Basis rows are hardcoded per axis rather than derived via
+## cross products, since RIGHT/UP/BACK are the only inputs.
 func _align_to_direction(direction: Vector3) -> Transform3D:
-	## Returns a Transform3D that positions and rotates a box (whose long axis
-	## is along its local X) so that local X aligns with `direction`, and the
-	## box center sits at half_length along that direction.
 	var half_len := axis_length * 0.5
-
-	# Default box long axis is +X. We need to rotate so X maps to `direction`.
-	# Use looking_at with up hint to build a basis.
-	# We want the X axis to point along `direction`.
-	# Construct basis: x = direction.normalized(), choose y and z perpendicular.
-	var dir := direction.normalized()
-	var up_hint := Vector3.UP
-	# If dir is parallel to up_hint, use a different hint
-	if absf(dir.dot(up_hint)) > 0.99:
-		up_hint = Vector3.FORWARD
-
-	var z_axis := dir.cross(up_hint).normalized()
-	var y_axis := z_axis.cross(dir).normalized()
-
-	var b := Basis(dir, y_axis, z_axis)
-	# Position center at half_len along direction (in local space)
-	var origin := dir * half_len
-	return Transform3D(b, origin)
+	var b: Basis
+	match direction:
+		Vector3.RIGHT:
+			b = Basis(Vector3.RIGHT, Vector3.UP, Vector3.BACK)
+		Vector3.UP:
+			b = Basis(Vector3.UP, Vector3.BACK, Vector3.RIGHT)
+		Vector3.BACK:
+			b = Basis(Vector3.BACK, Vector3.UP, Vector3.LEFT)
+		_:
+			b = Basis.IDENTITY
+	return Transform3D(b, direction * half_len)

@@ -77,19 +77,14 @@ var _flight_mode: String = "acro"
 ## approximation — read by the HUD instead of re-deriving it independently.
 var thrust_percent: float = 0.0
 
-# --- Blender models (GLB) ---
-# The drone's body, arms, and propellers are authored in Blender
-# (assets/models/drone_parts.blend) and exported as GLB. Each GLB carries one
-# representative part mesh; we assign those meshes to the anchor nodes in the
-# scene. See AGENTS.md "Coordinate System" for how Blender axes map to Godot.
+# Authored in Blender (assets/models/drone_parts.blend), exported as GLB.
+# See AGENTS.md "Coordinate System" for how Blender axes map to Godot.
 const BODY_GLB: PackedScene = preload("res://assets/models/drone_body.glb")
 const ARM_GLB: PackedScene = preload("res://assets/models/arm.glb")
 const PROP_GLB: PackedScene = preload("res://assets/models/propeller.glb")
 
-# --- Rotor visual ---
 # Front rotors (FL/FR) and back rotors (BL/BR) use different-colored Blender
-# props for at-a-glance orientation. The idle mesh + spin-disc tint are tracked
-# per rotor so each keeps its color.
+# props for at-a-glance orientation; idle mesh + spin-disc tint tracked per rotor.
 var _rotor_nodes: Array[MeshInstance3D] = []
 var _rotor_idle_meshes: Array[Mesh] = []        # per-rotor stopped prop
 var _rotor_spin_materials: Array[Material] = []  # per-rotor tinted blur disc
@@ -136,30 +131,24 @@ func _ready() -> void:
 
 
 func _setup_visuals() -> void:
-	# The body, arms, and rotors are bare Node3D markers positioned in drone.tscn
-	# (markers, not MeshInstance3D, so the editor shows no "missing mesh"
-	# warnings). Geometry comes from the Blender GLB models, attached as a
-	# MeshInstance3D child of each marker at runtime.
+	# Body/arms/rotors are bare Node3D markers in drone.tscn (not MeshInstance3D,
+	# so the editor shows no "missing mesh" warnings); GLB meshes attach here.
 	_attach_mesh(get_node_or_null("Body"), _mesh_from_glb(BODY_GLB))
 
 	var arm_mesh := _mesh_from_glb(ARM_GLB)
 	for arm_name in ["ArmFL", "ArmFR", "ArmBL", "ArmBR"]:
 		_attach_mesh(get_node_or_null(arm_name), arm_mesh)
 
-	# Propeller: propeller.glb exports a front-colored prop (PropFL) and a
-	# back-colored prop (PropBL). Front rotors get the front prop, back the back.
 	var front := _part_from_glb(PROP_GLB, "PropFL")
 	var back := _part_from_glb(PROP_GLB, "PropBL")
 
-	# Shared blur-disc geometry (prop spans ~0.18, so radius ~0.09).
+	# Blur-disc geometry (prop spans ~0.18, so radius ~0.09).
 	var disc := CylinderMesh.new()
 	disc.top_radius = 0.09
 	disc.bottom_radius = 0.09
 	disc.height = 0.006
 	_rotor_spin_mesh = disc
 
-	# Attach the matching stopped prop to each rotor marker and build the
-	# per-rotor spin disc, colored in code from the prop's color.
 	for rotor_name in ["RotorFL", "RotorFR", "RotorBL", "RotorBR"]:
 		var marker := get_node_or_null(rotor_name) as Node3D
 		if marker == null:
@@ -340,9 +329,6 @@ func _compute_and_apply_forces(delta: float) -> void:
 
 	var mix := _mix_rotors(control.collective, control.pitch_diff, control.roll_diff)
 	thrust_percent = (mix.fl + mix.fr + mix.bl + mix.br) * 0.25 * 100.0
-
-	# Rotor visual: swap between the Blender prop (idle) and a tinted blur disc
-	# (spinning) based on throttle cut.
 	_set_armed(control.collective >= 0.001)
 
 	var up: Vector3 = global_transform.basis.y

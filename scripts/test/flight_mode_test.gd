@@ -23,10 +23,6 @@ func _delayed_start() -> void:
 	await _run_all_tests()
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 func _reset_drone() -> void:
 	_drone.reset()
 	# Release all input actions to ensure clean state
@@ -66,10 +62,6 @@ static func _deg_to_rad(deg: float) -> float:
 static func _rad_to_deg(rad: float) -> float:
 	return rad * 180.0 / PI
 
-
-# ---------------------------------------------------------------------------
-# Test runner
-# ---------------------------------------------------------------------------
 
 func _run_all_tests() -> void:
 	_passed = 0
@@ -121,9 +113,6 @@ func _run_test(test_name: String) -> void:
 		print("[TEST] FAIL: ", test_name)
 
 
-# ---------------------------------------------------------------------------
-# Test: Stabilized self-levels from pitch tilt
-# ---------------------------------------------------------------------------
 func test_stabilized_self_levels_from_pitch_tilt() -> bool:
 	print("[TEST] --- test_stabilized_self_levels_from_pitch_tilt ---")
 	_reset_drone()
@@ -143,9 +132,6 @@ func test_stabilized_self_levels_from_pitch_tilt() -> bool:
 	return passed
 
 
-# ---------------------------------------------------------------------------
-# Test: Stabilized self-levels from roll tilt
-# ---------------------------------------------------------------------------
 func test_stabilized_self_levels_from_roll_tilt() -> bool:
 	print("[TEST] --- test_stabilized_self_levels_from_roll_tilt ---")
 	_reset_drone()
@@ -165,9 +151,6 @@ func test_stabilized_self_levels_from_roll_tilt() -> bool:
 	return passed
 
 
-# ---------------------------------------------------------------------------
-# Test: Stabilized self-levels from combined pitch + roll tilt
-# ---------------------------------------------------------------------------
 func test_stabilized_self_levels_from_combined_tilt() -> bool:
 	print("[TEST] --- test_stabilized_self_levels_from_combined_tilt ---")
 	_reset_drone()
@@ -192,9 +175,6 @@ func test_stabilized_self_levels_from_combined_tilt() -> bool:
 	return passed
 
 
-# ---------------------------------------------------------------------------
-# Test: Acro does NOT self-level
-# ---------------------------------------------------------------------------
 func test_acro_does_not_self_level() -> bool:
 	print("[TEST] --- test_acro_does_not_self_level ---")
 	_reset_drone()
@@ -217,9 +197,6 @@ func test_acro_does_not_self_level() -> bool:
 	return passed
 
 
-# ---------------------------------------------------------------------------
-# Test: Stabilized responds to pitch-forward input
-# ---------------------------------------------------------------------------
 func test_stabilized_responds_to_input() -> bool:
 	print("[TEST] --- test_stabilized_responds_to_input ---")
 	_reset_drone()
@@ -243,9 +220,6 @@ func test_stabilized_responds_to_input() -> bool:
 # Input-hold-release tests: apply brief stick input, observe behavior
 # ===========================================================================
 
-# ---------------------------------------------------------------------------
-# Test: Acro holds pitch angle after brief input
-# ---------------------------------------------------------------------------
 func test_acro_holds_pitch_after_input() -> bool:
 	print("[TEST] --- test_acro_holds_pitch_after_input ---")
 	_reset_drone()
@@ -273,9 +247,6 @@ func test_acro_holds_pitch_after_input() -> bool:
 	return passed
 
 
-# ---------------------------------------------------------------------------
-# Test: Acro holds roll angle after brief input
-# ---------------------------------------------------------------------------
 func test_acro_holds_roll_after_input() -> bool:
 	print("[TEST] --- test_acro_holds_roll_after_input ---")
 	_reset_drone()
@@ -303,9 +274,6 @@ func test_acro_holds_roll_after_input() -> bool:
 	return passed
 
 
-# ---------------------------------------------------------------------------
-# Test: Stabilized self-levels after brief pitch input
-# ---------------------------------------------------------------------------
 func test_stabilized_levels_after_pitch_input() -> bool:
 	print("[TEST] --- test_stabilized_levels_after_pitch_input ---")
 	_reset_drone()
@@ -328,9 +296,6 @@ func test_stabilized_levels_after_pitch_input() -> bool:
 	return passed
 
 
-# ---------------------------------------------------------------------------
-# Test: Stabilized self-levels after brief roll input
-# ---------------------------------------------------------------------------
 func test_stabilized_levels_after_roll_input() -> bool:
 	print("[TEST] --- test_stabilized_levels_after_roll_input ---")
 	_reset_drone()
@@ -353,9 +318,6 @@ func test_stabilized_levels_after_roll_input() -> bool:
 	return passed
 
 
-# ---------------------------------------------------------------------------
-# Test: Roll input in stabilized does not cause yaw spin-out
-# ---------------------------------------------------------------------------
 func test_stabilized_roll_does_not_induce_yaw_spin() -> bool:
 	print("[TEST] --- test_stabilized_roll_does_not_induce_yaw_spin ---")
 	_reset_drone()
@@ -398,9 +360,6 @@ static func _normalize_angle(deg: float) -> float:
 	return deg
 
 
-# ---------------------------------------------------------------------------
-# Test: Altitude hold maintains altitude within 0.5m over 200 ticks
-# ---------------------------------------------------------------------------
 func test_altitude_hold_maintains_altitude() -> bool:
 	print("[TEST] --- test_altitude_hold_maintains_altitude ---")
 	_reset_drone()
@@ -423,9 +382,6 @@ func test_altitude_hold_maintains_altitude() -> bool:
 	return passed
 
 
-# ---------------------------------------------------------------------------
-# Test: Brake mode reduces horizontal velocity via rotor-thrust tilt
-# ---------------------------------------------------------------------------
 func test_brake_kills_horizontal_velocity() -> bool:
 	print("[TEST] --- test_brake_kills_horizontal_velocity ---")
 	_reset_drone()
@@ -448,9 +404,6 @@ func test_brake_kills_horizontal_velocity() -> bool:
 	return passed
 
 
-# ---------------------------------------------------------------------------
-# Test: Hard vertical impact into the ground triggers a crash
-# ---------------------------------------------------------------------------
 func test_crash_on_hard_impact() -> bool:
 	print("[TEST] --- test_crash_on_hard_impact ---")
 	_reset_drone()
@@ -471,9 +424,6 @@ func test_crash_on_hard_impact() -> bool:
 	return passed
 
 
-# ---------------------------------------------------------------------------
-# Test: Gentle landing does NOT trigger a crash
-# ---------------------------------------------------------------------------
 func test_gentle_landing_no_crash() -> bool:
 	print("[TEST] --- test_gentle_landing_no_crash ---")
 	_reset_drone()
@@ -496,9 +446,6 @@ func test_gentle_landing_no_crash() -> bool:
 	return passed
 
 
-# ---------------------------------------------------------------------------
-# Test: reset() clears the CRASHED state and returns to spawn
-# ---------------------------------------------------------------------------
 func test_reset_clears_crash() -> bool:
 	print("[TEST] --- test_reset_clears_crash ---")
 	_reset_drone()

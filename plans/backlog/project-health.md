@@ -12,6 +12,3 @@
   workflows (e.g. an agent inspecting a run without watching it live).
 - **Doxygen-style docs** — wanted so the codebase is self-explanatory at a
   glance. Agreed candidate for a "documentation after P2" pass.
-- **Code audit** — general pass to slim down code, improve comments, reduce
-  bloat across the scripts. Candidate for a dedicated cleanup pass (e.g. via
-  the `simplify` skill) rather than folding into feature work.
