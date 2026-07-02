@@ -33,3 +33,58 @@ jobs:
 
       - name: Flight recorder tests
         run: ./godot-bin --headless --path . scenes/test/flight_recorder_test_scene.tscn
+
+  # Class reference generated from GDScript ## doc comments → GitHub Pages.
+  # One-time repo setting required: Settings → Pages → Source: GitHub Actions.
+  docs:
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Godot
+        run: |
+          curl -fsSL -o godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}/Godot_v${GODOT_VERSION}_linux.x86_64.zip"
+          unzip -q godot.zip
+          mv "Godot_v${GODOT_VERSION}_linux.x86_64" godot-bin
+
+      - name: Dump class XML
+        run: |
+          ./godot-bin --headless --path . --import || true
+          # Project classes from ## doc comments
+          mkdir -p /tmp/docxml
+          ./godot-bin --headless --path . --doctool /tmp/docxml --gdscript-docs res://scripts
+          rm -f /tmp/docxml/*test*.xml /tmp/docxml/Mock*.xml /tmp/docxml/scripts--*.xml
+          # Engine classes too (flattened) so make_rst resolves builtin types;
+          # --filter below keeps them out of the generated pages
+          mkdir -p /tmp/engine_xml_tree /tmp/engine_flat
+          ./godot-bin --headless --doctool /tmp/engine_xml_tree
+          find /tmp/engine_xml_tree -name '*.xml' -exec cp {} /tmp/engine_flat/ \;
+
+      - name: Convert XML to RST (make_rst.py from the godot repo)
+        run: |
+          mkdir -p /tmp/godot/doc/tools /tmp/godot/misc/utility
+          base="https://raw.githubusercontent.com/godotengine/godot/${GODOT_VERSION%-stable}"
+          curl -fsSL -o /tmp/godot/doc/tools/make_rst.py "$base/doc/tools/make_rst.py"
+          curl -fsSL -o /tmp/godot/version.py "$base/version.py"
+          curl -fsSL -o /tmp/godot/misc/utility/color.py "$base/misc/utility/color.py"
+          touch /tmp/godot/misc/__init__.py /tmp/godot/misc/utility/__init__.py
+          python3 /tmp/godot/doc/tools/make_rst.py --filter "docxml/" -o docs/classes /tmp/docxml /tmp/engine_flat
+
+      - name: Build site
+        run: |
+          pip install --quiet sphinx furo
+          python3 -m sphinx -b html docs docs/_build -q
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/_build
+
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -85,9 +85,9 @@ var _flight_mode: String = "acro"
 ## approximation — read by the HUD instead of re-deriving it independently.
 var thrust_percent: float = 0.0
 
-## Last applied per-rotor mix [fl, fr, bl, br] (post anti-clip/idle clamping),
-## 0..1 each. Same expose-for-observer pattern as thrust_percent — read by
-## FlightRecorder; the commanded rotor outputs aren't observable from outside.
+## Last applied per-rotor mix in fl, fr, bl, br order (post anti-clip/idle
+## clamping), 0..1 each. Same expose-for-observer pattern as thrust_percent —
+## read by FlightRecorder; commanded rotor outputs aren't observable outside.
 var last_mix: Array[float] = [0.0, 0.0, 0.0, 0.0]
 
 # Authored in Blender (assets/models/drone_parts.blend), exported as GLB.

@@ -3,6 +3,10 @@
 /android/
 /build/
 
+# Generated docs (built by the CI docs job / locally via docs pipeline)
+/docs/classes/
+/docs/_build/
+
 # macOS
 .DS_Store
 
