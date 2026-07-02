@@ -5,10 +5,13 @@ Single drone, flyable with a PS5 DualSense controller. Procedural terrain,
 chase/FPV cameras, debug HUD.
 
 Current phase: **Per-rotor thrust vectoring complete**, plus **Phase B assisted
-flight modes** (altitude hold + brake) and **Phase C crash / signal loss** —
-both acro and stabilized modes use individual rotor forces applied at each arm
-position; hard impacts kill the "signal" (rotors cut, physics tumbles the
-airframe, SIGNAL LOST overlay, frozen FPV feed). 15 headless tests pass.
+flight modes** (altitude hold + brake), **Phase C crash / signal loss**, and
+**Phase D wind system** — both acro and stabilized modes use individual rotor
+forces applied at each arm position; hard impacts kill the "signal" (rotors
+cut, physics tumbles the airframe, SIGNAL LOST overlay, frozen FPV feed); a
+terrain-aware prevailing wind field pushes the drone via relative-airspeed
+drag, visualized with advected streak particles and a HUD wind arrow. 15 + 6
+headless tests pass.
 
 ---
 
@@ -29,6 +32,9 @@ Main (Node3D)
 │   ├── CameraRig (Node3D)
 │   ├── CollisionShape3D
 │   └── DebugAxes (Node3D)
+├── CrashEffects (Node3D)
+├── WindField (Node3D)
+│   └── WindParticles (MultiMeshInstance3D)
 ├── ChaseCamera (Camera3D)
 └── DebugHUD (CanvasLayer)
 ```
@@ -57,7 +63,20 @@ _apply_angular_damping() → per-axis damping (0.08 pitch/roll, 1.0 yaw)
 Hover throttle per-rotor: `(mass * gravity) / (4 * max_thrust)`.
 
 Static `_mix_rotors(collective, pitch, roll)` handles anti-clip scaling and
-MIN_ROTOR (0.02) protection. Early-returns all zeros if collective < 0.001
+MIN_ROTOR (0.02) protection, in two stages (the same approach real flight-
+controller mixers use): clip the differential only if `|pitch| + |roll|`
+exceeds `min(collective - MIN_ROTOR, (1.0 - MIN_ROTOR) / 2)` — the second
+term is the max spread achievable by *shifting*, see next — then, if the
+resulting mix's highest rotor still exceeds 1.0 (only possible at high
+collective), shift **all four rotors down uniformly** by the overshoot. This
+trades a little collective (climb rate) for full pitch/roll authority near
+100% throttle, instead of the differential collapsing to zero the instant
+any single rotor would exceed 1.0 (the original behavior — full differential
+was impossible at 100% throttle because it required equal headroom to raise
+*and* lower rotors around the exact commanded collective; shifting only
+needs headroom to lower). Shifts only ever go down, never up, so a centered
+stick still gets exactly `collective` on all four rotors — max climb rate at
+full throttle is unaffected. Early-returns all zeros if collective < 0.001
 (throttle cut kills motors).
 
 **Crash / signal loss (Phase C):** two states, `FLYING` / `CRASHED`. Detection
@@ -167,6 +186,68 @@ over a ~10–13s lifetime. Emits in world space (`local_coords = false` +
 `top_level`), so the cloud stays put while the wreck tumbles away. Purely
 visual — no collision, no forces.
 
+### `scripts/environment/wind_field.gd` — Terrain-Aware Wind (Phase D)
+
+`WindField extends Node3D`, a node in `main.tscn` (same environment-side
+pattern as `CrashEffects` — not an autoload), self-registered into group
+`"wind_field"`. `DroneController` discovers it lazily on the first physics
+tick (group lookup, not `_ready()` — Drone precedes WindField in tree order)
+and samples `get_wind(global_position)` every tick; no `WindField` in a scene
+(e.g. the flight-mode test scene) simply means zero wind everywhere.
+
+`get_wind(pos) -> Vector3` pipeline: a protected calm zone around the spawn
+pad (independent of terrain) zeroes wind within `calm_radius`; an
+altitude-above-ground profile ramps speed from `ground_wind_fraction` of
+`base_speed` at ground level up to full speed at `boundary_layer_height`
+AGL; upwind terrain crests cast a shelter "shadow" (checked at several
+upwind sample distances) that can cut speed to near-zero in a lee valley;
+taller ground gets a ridge speed boost; and a terrain-gradient check deflects
+wind horizontally around (rather than through) windward slopes — preserving
+magnitude, not attenuating it — while adding a proportional updraft. Gentle
+gusts and a slow direction wobble come from two low-octave `FastNoiseLite`
+instances. Terrain access is duck-typed on `get_height(x, z)` with a
+flat-ground (`0.0`) fallback, so `WindField` works with no terrain node at
+all (used by the headless test suite's `MockHillTerrain`).
+
+### `scripts/environment/wind_particles.gd` — Wind Streak Visualization (Phase D)
+
+`WindParticles extends MultiMeshInstance3D`, a child of `WindField`. Custom
+advected-streak system rather than `CPUParticles3D`, because each streak
+needs to sample the wind at its own world position — something
+`CPUParticles3D` can't do per-particle. ~300 thin box-mesh streaks roam a box
+volume centered on the drone (camera fallback if not found), each carrying a
+cached wind-velocity sample that's refreshed on a staggered schedule
+(`resample_interval` frames, offset by index so the per-frame sample cost is
+spread evenly) rather than every frame. Per streak: age → respawn (uniform in
+the box, fresh sample) when expired or too far from the focus; advect by the
+cached velocity; write a `MultiMesh` instance transform oriented along the
+wind direction and scaled in length by speed, with alpha from speed (calm →
+invisible) and a short fade-in/out. Unshaded, alpha-blended, no shadows.
+
+### `scripts/drone/drone_controller.gd` — Wind Drag (Phase D)
+
+Relative-airspeed drag, `F = air_drag_coefficient * (wind_velocity -
+linear_velocity)`, applied as a central force **before** the `FLYING` state
+gate in `_physics_process` (so it also acts while `CRASHED` — the wreck
+drifts downwind, same as the old engine damping did). This replaced the old
+body `linear_damp = 0.5`, which is now `0.0`; `air_drag_coefficient = 1.0`
+N·s/m at `mass = 2.0` kg reproduces the old damping exactly in still air
+(`wind_velocity == 0`), on top of the untouched engine default
+`physics/3d/default_linear_damp = 0.1` — this is why the existing 15
+flight-mode tests stay green unmodified. **Do not re-add body `linear_damp`**
+to "fix" drift or damping feel — tune `air_drag_coefficient` instead, or the
+parity with the old feel breaks silently.
+
+### `scripts/ui/debug_hud.gd` — Wind Arrow (Phase D)
+
+A small camera-relative arrow (same projection technique as the axis gizmo:
+`cam_basis.inverse() * wind_velocity` → `Vector2(x, -y)`) below the gizmo
+panel, showing the ambient wind sampled at the drone (`_drone.wind_velocity`,
+not the drag force itself). Arrow length and alpha scale with speed; below
+0.3 m/s it collapses to a dim center dot and an "WIND CALM" label, otherwise
+an "WIND %.1f m/s" readout. Dims alongside the rest of the telemetry on
+crash, restores on reset.
+
 ### `scripts/camera/chase_camera.gd` — Camera
 
 Two modes:
@@ -215,6 +296,24 @@ during a crash bails from the dead feed to watch the wreck. Reset (polled via
 Run: `godot --headless --path . scenes/test/flight_mode_test_scene.tscn`
 (or `./run_tests.sh`)
 
+### `scripts/test/wind_field_test.gd` — Wind Headless Test Harness (Phase D)
+
+6 tests against a deterministic `WindField` (`wind_direction_deg = 90`,
+turbulence and direction wobble disabled) over `MockHillTerrain` (a single
+12m Gaussian hill at `(60, 0)`, flat elsewhere):
+
+| Test | Verification |
+|---|---|
+| Spawn zone calm | Wind ≈ 0 inside the spawn calm radius, > 1 m/s just outside |
+| Wind grows with AGL | Speed increases with altitude on flat ground, → base_speed |
+| Ridge windier than valley | A crest is > 2× windier than its sheltered downwind wake |
+| Wind deflects around hill | Opposite-sign lateral deflection on either flank, magnitude preserved |
+| Null terrain fallback | A `WindField` with no terrain reduces to `dir * base_speed`, finite |
+| Hover drifts downwind | A hovering drone accumulates downwind drift under wind drag |
+
+Run: `godot --headless --path . scenes/test/wind_test_scene.tscn`
+(or `./run_tests.sh`, which now runs both suites)
+
 ---
 
 ## Drone Geometry
@@ -243,6 +342,9 @@ tail (+Z). The full canonical table (with the mixer sign rationale) lives in
   torque from force offset (r × F)
 - Yaw torque applied explicitly via `apply_torque` (rotor drag not from force offset)
 - Anti-clip scaling prevents rotor saturation while preserving pitch/roll ratio
+- Near 100% throttle, a uniform downward shift of all four rotors (never up)
+  trades a little collective for full pitch/roll authority, rather than
+  clipping differential to zero — see `_mix_rotors` above
 - Minimum rotor throttle (2%) prevents full cut-out during aggressive maneuvers
 - Throttle cut (collective < 0.001) kills all rotors
 
@@ -318,3 +420,20 @@ triggers, so the actions never fired on a real controller.
 | Brake D gain | brake_assist.gd | 1.5 |
 | Brake max tilt | brake_assist.gd | 25° |
 | Brake time constant | brake_assist.gd | 1.0 s |
+| air_drag_coefficient | drone_controller.gd | 1.0 N·s/m |
+| WindField wind_direction_deg | wind_field.gd | 70.0° (0° = −Z) |
+| WindField base_speed | wind_field.gd | 6.0 m/s |
+| WindField boundary_layer_height | wind_field.gd | 35.0 m AGL |
+| WindField ground_wind_fraction | wind_field.gd | 0.35 |
+| WindField shelter_strength | wind_field.gd | 0.95 |
+| WindField shadow_angle_deg | wind_field.gd | 22.0° |
+| WindField deflection_strength | wind_field.gd | 1.2 |
+| WindField updraft_strength | wind_field.gd | 0.6 |
+| WindField ridge_boost | wind_field.gd | 0.35 |
+| WindField ridge_reference_height | wind_field.gd | 12.0 m |
+| WindField turbulence_strength | wind_field.gd | 0.25 |
+| WindField direction_wobble_deg | wind_field.gd | 12.0° |
+| WindField calm_radius / calm_falloff | wind_field.gd | 18.0 m / 12.0 m |
+| WindParticles streak_count | wind_particles.gd | 300 |
+| WindParticles volume_extents | wind_particles.gd | (45, 25, 45) m |
+| WindParticles resample_interval | wind_particles.gd | 4 frames |

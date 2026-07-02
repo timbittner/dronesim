@@ -7,8 +7,9 @@ vibe-coding playground with the intent to iterate into a drone swarm simulator
 with realistic flight physics, autonomous routing, weather, and threat simulation.
 
 **Current phase:** Per-rotor thrust vectoring complete, plus assisted flight
-modes (altitude hold + brake) and crash / signal loss (P2 Phase C). Both acro
-and stabilized modes use individual rotor forces applied at each arm position.
+modes (altitude hold + brake), crash / signal loss (P2 Phase C), and a
+terrain-aware wind system (P2 Phase D). Both acro and stabilized modes use
+individual rotor forces applied at each arm position.
 See `PROJECT_SUMMARY.md` for detailed architecture and tuning parameters.
 
 ## Tech Stack
@@ -32,10 +33,12 @@ scenes/
   environment/terrain.tscn
   test/                   Headless test scenes
     flight_mode_test_scene.tscn
+    wind_test_scene.tscn
 scripts/
   drone/
     drone_controller.gd          Core controller — input, mixer, damping,
-                                 crash detection + FLYING/CRASHED state
+                                 crash detection + FLYING/CRASHED state,
+                                 relative-airspeed wind drag
     flight_mode_base.gd          Abstract base — FlightControl, RotorMix
     flight_mode_acro.gd          Idle-floor throttle + expo differential, no auto-level
     flight_mode_stabilized.gd    PD auto-level + rate mode
@@ -49,10 +52,14 @@ scripts/
   environment/
     terrain_generator.gd         Procedural noise terrain
     crash_effects.gd             Dust burst on crash (listens to crash_detected)
+    wind_field.gd                Terrain-aware prevailing wind (group "wind_field")
+    wind_particles.gd            Advected wind-streak MultiMesh (child of WindField)
   ui/
-    debug_hud.gd                 Telemetry overlay
+    debug_hud.gd                 Telemetry overlay + wind arrow
   test/
     flight_mode_test.gd          15 headless tests
+    wind_field_test.gd           6 headless wind-field tests
+    mock_hill_terrain.gd         Deterministic terrain stand-in for wind tests
 assets/
   materials/
   models/
@@ -122,6 +129,43 @@ a `Node3D` in `main.tscn` that listens to the drone's `crash_detected` signal �
 the controller owns flight/crash logic only; what the world does in response
 does not belong in it. The dust emits in world space (`top_level`), so it stays
 put while the wreck tumbles. Purely visual, no collision or forces.
+
+### Wind (P2 Phase D)
+
+Wind acts as **relative-airspeed drag**, not a magic push:
+`apply_central_force(air_drag_coefficient * (wind_velocity - linear_velocity))`
+in `drone_controller.gd::_physics_process`, applied **before** the
+FLYING/CRASHED gate so a crashed wreck still drifts downwind (same as before).
+This drag force *replaced* the old `linear_damp = 0.5` on the RigidBody3D
+(now `0.0`) — `air_drag_coefficient = 1.0` N·s/m at `mass = 2.0` kg reproduces
+the old damping exactly in still air, on top of the untouched engine default
+`physics/3d/default_linear_damp = 0.1`. **Do not re-add body `linear_damp`**
+to tune drift or damping feel; that silently breaks the parity argument and
+double-damps on top of the drag force. Tune `air_drag_coefficient` instead.
+
+`WindField` (`scripts/environment/wind_field.gd`) is a `Node3D` in
+`main.tscn` — same environment-side pattern as `CrashEffects`, not an
+autoload — self-registered into group `"wind_field"`. `DroneController`
+resolves it lazily via `get_tree().get_first_node_in_group("wind_field")` on
+first use (not `_ready()` — Drone precedes WindField in `main.tscn`'s tree
+order). **No `WindField` in a scene means zero wind everywhere** — this is
+why the flight-mode test scene (which has none) needed no changes to stay
+green. `get_wind(pos)` shapes speed and direction from terrain: a protected
+calm zone around the spawn pad, an altitude-above-ground profile, upwind
+ridge shelter (valleys behind ridges go calm), a ridge speed boost, and
+horizontal deflection + updraft around windward slopes (rotates the wind
+vector, doesn't attenuate it), plus gentle gust/direction noise. Terrain
+access is duck-typed on `get_height(x, z)` with a flat-ground fallback, so it
+works with no terrain node.
+
+Visualized two ways: `scripts/environment/wind_particles.gd`
+(`WindParticles`, a `MultiMeshInstance3D` child of `WindField`) advects ~300
+thin streak instances through a volume centered on the drone, each sampling
+`get_wind()` at its own position on a staggered schedule — a custom system
+because `CPUParticles3D` can't sample per-particle forces; and a small
+camera-relative HUD arrow in `debug_hud.gd` (same projection as the axis
+gizmo) showing the ambient wind at the drone, with size/alpha scaling by
+speed and an `m/s` readout, dimming on crash like the rest of the telemetry.
 
 ### Extension Points
 

@@ -362,7 +362,57 @@ On reset:
 
 ---
 
-## Phase D — Wind Fields
+## Phase D — Wind Fields — ✅ DONE
+
+Landed with a substantially redesigned architecture, agreed with Tim during a
+dedicated planning pass (see the approved plan, reproduced in spirit below —
+the text under D-1/D-2/D-3 is the **original sketch, superseded**, kept for
+history):
+
+- **Node-in-group, not an autoload.** `WindField` (`wind_field.gd`) is a
+  `Node3D` in `main.tscn`, same environment-side pattern as `CrashEffects` —
+  self-registered into group `"wind_field"`, discovered lazily by
+  `DroneController` on first physics tick (group lookup, not `_ready()` —
+  Drone precedes WindField in tree order). No `WindField` in a scene means
+  zero wind, which is why the flight-mode test scene needed zero changes.
+- **Relative-airspeed drag, not `apply_central_force(wind_vector *
+  factor)`.** `F = air_drag_coefficient * (wind_velocity - linear_velocity)`
+  replaces the old `linear_damp = 0.5` (now `0.0`) on the RigidBody3D — tuned
+  (`air_drag_coefficient = 1.0` N·s/m at 2.0 kg) to reproduce the old damping
+  exactly in still air, so the 15 existing headless tests needed no changes.
+  Applied before the FLYING/CRASHED gate, so a wreck drifts downwind too.
+- **Both visualization options shipped, not a pick-one.** Advected
+  MultiMesh streak particles (`wind_particles.gd`) *and* a camera-relative
+  HUD arrow (`debug_hud.gd`, same projection as the axis gizmo), per Tim's
+  request — the original D-2 framed these as alternatives.
+- **Altitude-above-ground boundary-layer profile, not linear altitude
+  scaling.** `get_wind()` ramps from `ground_wind_fraction` of `base_speed`
+  at ground level to full speed at `boundary_layer_height` AGL (terrain-
+  relative, not `position.y` scaling as D-3 sketched) — needed so wind can
+  actually go calm in valleys rather than just scaling with world altitude.
+- **Terrain shapes wind speed *and* direction**, not just intensity:
+  upwind-ridge shelter (valleys behind ridges go calm), a ridge speed boost,
+  and horizontal deflection + updraft around windward slopes (rotates the
+  wind vector, doesn't attenuate it) — this and the calm-zone/gust math were
+  the actual design work of this phase, well beyond D-1's flat "constant
+  wind + turbulence" sketch.
+- **Per-rotor asymmetric wind (D-1's roll-torque-from-wind idea) explicitly
+  deferred** — not implemented. The uniform relative-airspeed drag model
+  was judged sufficient for this phase; revisit only if a specific gameplay
+  case wants wind-induced attitude disturbance beyond what drag-drift +
+  pilot correction already produces.
+- 6 new headless tests (`wind_field_test.gd` against a deterministic
+  `MockHillTerrain`): spawn-zone calm, wind grows with AGL, ridge windier
+  than valley, wind deflects around a hill (magnitude preserved), null-
+  terrain fallback, hovering drone drifts downwind. `run_tests.sh` now runs
+  both suites (15 + 6).
+
+Full design detail: `scripts/environment/wind_field.gd`,
+`scripts/environment/wind_particles.gd`, `AGENTS.md` → "Wind (P2 Phase D)",
+`PROJECT_SUMMARY.md` → wind sections.
+
+<details>
+<summary>Original sketch (superseded — kept for history)</summary>
 
 ### D-1 Global wind vector + turbulence
 
@@ -423,10 +473,12 @@ Wind gets stronger with altitude (realistic):
    handles horizontal and altitude hold handles vertical. Feels right but
    need to make sure they don't fight each other.
 
-4. **Wind + stabilized mode interaction:** Wind pushes drone sideways.
-   Stabilized mode auto-levels attitude but doesn't resist horizontal
-   drift — so wind will naturally push the drone. That's realistic drone
-   behavior (no GPS hold). Brake mode would cancel wind drift.
+4. ~~**Wind + stabilized mode interaction**~~ — Resolved as expected: wind
+   pushes the drone sideways via relative-airspeed drag, stabilized mode
+   auto-levels attitude but doesn't resist horizontal drift, so a hovering
+   drone drifts downwind (confirmed by the `test_hover_drifts_downwind`
+   headless test). Brake mode (R2) cancels the drift, same as it cancels any
+   other horizontal velocity.
 
 ---
 
@@ -446,9 +498,11 @@ color variation confirmed.
 - Fly into terrain, verify SIGNAL LOST appears
 - Press Triangle, verify reset + cleared overlay
 
-**Phase D (wind):**
-- Print wind vector to console during flight
-- Verify drone drifts downwind in stabilized mode with no stick input
+**Phase D (wind):** ✅ done
+- 6 headless tests (`wind_field_test.gd`): spawn calm, AGL profile, ridge vs.
+  valley, deflection around a hill, null-terrain fallback, downwind drift
+- Manual: streaks bend around hills / vanish in valleys, HUD arrow scales
+  and fades with speed and dims on crash, R2 brake cancels wind drift
 
 ---
 
@@ -465,11 +519,11 @@ color variation confirmed.
 9. ~~Phase B-4 (HUD indicators)~~ — done
 10. ~~Phase C-1 + C-2 (crash detection + state machine)~~ — done
 11. ~~Phase C-3 (signal lost HUD + frozen FPV feed)~~ — done
-12. Phase D-1 (wind system) — 25 min
-13. Phase D-2 (wind viz) — 20 min
-14. Phase D-3 (altitude wind) — 10 min
+12. ~~Phase D (wind field + drag refactor + headless tests + streak particles
+    + HUD arrow + docs)~~ — done
 
-Estimated remaining: ~1h of focused work (Phase D).
+P2 is now complete. Next direction is unscheduled — see "Post-P2 direction"
+below.
 
 ---
 
@@ -488,3 +542,5 @@ Notes from discussion after P2 planning, for whenever a P3 doc gets drafted:
 - **Doxygen-style docs** — wanted, so the codebase is self-explanatory at a
   glance. Good candidate for the "documentation after P2" pass already agreed
   on.
+- **UI Menu** - DPad controlled 2D menu to control various flags of the 
+  simulation similar to games like Forza Horizon or F1 Series.
