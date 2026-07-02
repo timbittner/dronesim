@@ -14,4 +14,6 @@ Nothing here is scheduled or prioritized relative to the others yet.
   degradation, target/goal marking, UI menu, sound
 - [quests-and-scenarios.md](quests-and-scenarios.md) — objectives/missions
   to give flying a purpose beyond free flight
-- [project-health.md](project-health.md) — GitHub upstream, docs, code audit
+- [project-health.md](project-health.md) — **promoted to P3**
+  (`../2026-07-02_P3-project-health.md`); replay scrubbing deferred into
+  drone-controls-and-physics.md
