@@ -49,7 +49,7 @@ project's Edit page.
 Notes:
 - A gamepad is only detected by browsers after a button press inside the
   page; click the canvas first, then press any button on the controller.
-- DualSense over Bluetooth on macOS is not reliably detected in **Safari**
-  (confirmed independent of this project — a plain JS Gamepad-API test page
-  fails identically); **Chrome** detects it fine. Recommend Chrome for the
-  itch.io page.
+- On macOS, a DualSense paired over Bluetooth needs the browser explicitly
+  allowed in **System Settings → the DualSense's per-app permission list**
+  (not a Godot/browser bug — the OS gates which apps may read the
+  controller). Add the browser there, then restart it.

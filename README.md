@@ -13,7 +13,7 @@ auto-level, with assisted altitude hold and brake.
 
 ## Play
 
-A browser build is published on itch.io: [bitona.itch.io/dronesim](https://bitona.itch.io/dronesim) *(currently in draft — the page isn't visible until published)*. Use **Chrome** for gamepad support — Safari on macOS doesn't reliably detect a Bluetooth DualSense.
+A browser build is published on itch.io: [bitona.itch.io/dronesim](https://bitona.itch.io/dronesim) *(currently in draft — the page isn't visible until published)*. On macOS, a Bluetooth DualSense needs the browser allowed in its per-app permission list under System Settings — see `docs/publishing.md`.
 
 ## Run locally
 
