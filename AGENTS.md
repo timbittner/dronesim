@@ -6,10 +6,13 @@ A 3D drone flight simulator built in Godot 4.7 / GDScript. Started as a
 vibe-coding playground with the intent to iterate into a drone swarm simulator
 with realistic flight physics, autonomous routing, weather, and threat simulation.
 
-**Current phase:** Per-rotor thrust vectoring complete, plus assisted flight
-modes (altitude hold + brake), crash / signal loss (P2 Phase C), and a
-terrain-aware wind system (P2 Phase D). Both acro and stabilized modes use
-individual rotor forces applied at each arm position.
+**Current phase:** P2 complete (per-rotor thrust vectoring, assisted flight
+modes, crash / signal loss, terrain-aware wind), plus **P3 project health**:
+GitHub upstream with CI (`.github/workflows/ci.yml`), MIT license, JSONL
+flight telemetry (`FlightRecorder`), an itch.io web export (`export_web.sh`,
+`docs/publishing.md`), and a GitHub Pages class reference generated from
+GDScript `##` doc comments — keep public members documented; the docs CI job
+fails on malformed doc comments (bare `[...]` parses as BBCode).
 See `PROJECT_SUMMARY.md` for detailed architecture and tuning parameters.
 
 ## Tech Stack
@@ -34,6 +37,7 @@ scenes/
   test/                   Headless test scenes
     flight_mode_test_scene.tscn
     wind_test_scene.tscn
+    flight_recorder_test_scene.tscn
 scripts/
   drone/
     drone_controller.gd          Core controller — input, mixer, damping,
@@ -54,11 +58,14 @@ scripts/
     crash_effects.gd             Dust burst on crash (listens to crash_detected)
     wind_field.gd                Terrain-aware prevailing wind (group "wind_field")
     wind_particles.gd            Advected wind-streak MultiMesh (child of WindField)
+    flight_recorder.gd           JSONL telemetry per physics tick (P3) —
+                                 user://telemetry/, rotates on drone_reset
   ui/
     debug_hud.gd                 Telemetry overlay + wind arrow
   test/
     flight_mode_test.gd          15 headless tests
     wind_field_test.gd           6 headless wind-field tests
+    flight_recorder_test.gd      3 headless telemetry tests
     mock_hill_terrain.gd         Deterministic terrain stand-in for wind tests
 assets/
   materials/
@@ -237,8 +244,14 @@ The `_rotor_positions` array order is `[FL, FR, BL, BR]` and the mixer output
 - Godot editor must be open when using MCP tools (auto-import on file changes)
 - GDScript files can be edited externally; Godot reloads on focus
 - Scene files (.tscn) should be edited in the Godot editor unless making targeted text edits
-- **Run tests:** `godot --headless --path . scenes/test/flight_mode_test_scene.tscn`
+- **Run tests:** `./run_tests.sh` (all three headless suites; new
+  `class_name`s need a `godot --headless --path . --import` first if the
+  editor isn't open to refresh the global class cache)
 - **Run game:** F6 in editor or `godot --path .`
+- **Web export:** `./export_web.sh` → `build/dronesim-web.zip` (itch.io flow
+  in `docs/publishing.md`)
+- **Telemetry:** every run of `main.tscn` logs JSONL to `user://telemetry/`
+  (absolute path printed at startup) — grep it instead of watching a live run
 
 ## Controller Layout (Mode 2)
 

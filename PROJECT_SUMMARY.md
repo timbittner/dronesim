@@ -10,8 +10,10 @@ flight modes** (altitude hold + brake), **Phase C crash / signal loss**, and
 forces applied at each arm position; hard impacts kill the "signal" (rotors
 cut, physics tumbles the airframe, SIGNAL LOST overlay, frozen FPV feed); a
 terrain-aware prevailing wind field pushes the drone via relative-airspeed
-drag, visualized with advected streak particles and a HUD wind arrow. 15 + 6
-headless tests pass.
+drag, visualized with advected streak particles and a HUD wind arrow. **P3
+project health** adds GitHub upstream (README, MIT, CI), JSONL flight
+telemetry, an itch.io web export, and a generated GitHub Pages class
+reference. 15 + 6 + 3 headless tests pass.
 
 ---
 
@@ -35,6 +37,7 @@ Main (Node3D)
 ├── CrashEffects (Node3D)
 ├── WindField (Node3D)
 │   └── WindParticles (MultiMeshInstance3D)
+├── FlightRecorder (Node)         # JSONL telemetry per physics tick (P3)
 ├── ChaseCamera (Camera3D)
 └── DebugHUD (CanvasLayer)
 ```
@@ -312,7 +315,50 @@ turbulence and direction wobble disabled) over `MockHillTerrain` (a single
 | Hover drifts downwind | A hovering drone accumulates downwind drift under wind drag |
 
 Run: `godot --headless --path . scenes/test/wind_test_scene.tscn`
-(or `./run_tests.sh`, which now runs both suites)
+(or `./run_tests.sh`, which runs all suites)
+
+### `scripts/environment/flight_recorder.gd` — Telemetry Logging (P3)
+
+Environment-side observer (same pattern as CrashEffects/WindField): streams
+one JSONL line per physics tick to `user://telemetry/flight_<ts>_<n>.jsonl` —
+`t`, `pos`, `quat`, `vel`, `angvel`, rotor `mix`, `sticks` (pitch, roll, yaw,
+throttle), `ah`/`brake` flags, `mode`, `wind`, `crashed`. First line is a meta
+header (`version`, `tick_hz`, `mass`); flushed ~1/s (live-tailable, survives a
+kill); rotated to a new file on the controller's `drone_reset` signal; the
+absolute path is printed at startup so headless/agent runs find it from
+stdout. The controller exposes only `last_mix` for this (commanded rotor
+outputs aren't observable otherwise). Greppable, e.g. `grep '"crashed":true'`.
+In-sim replay/scrubbing is backlog, not built.
+
+### `scripts/test/flight_recorder_test.gd` — Recorder Headless Test Harness (P3)
+
+| Test | Verification |
+|---|---|
+| One frame per tick | ~60 log lines appended across 60 physics ticks |
+| Valid JSONL + meta header | Every line parses; header meta correct; pressed throttle shows in `mix` |
+| Reset rotates log file | `reset()` closes the old file and opens a fresh one |
+
+Run: `godot --headless --path . scenes/test/flight_recorder_test_scene.tscn`
+
+---
+
+## Project Health (P3)
+
+- **CI** (`.github/workflows/ci.yml`): on push/PR to main, downloads Godot
+  4.7-stable linux, `--import`s, runs all three headless suites. A second
+  `docs` job (push to main only) regenerates the class reference from the
+  GDScript `##` doc comments (`--doctool --gdscript-docs` → `make_rst.py` →
+  Sphinx/furo) and deploys it to GitHub Pages. Doc-comment syntax errors
+  (e.g. bare `[...]` brackets, parsed as BBCode) fail the job — intentional.
+- **Web export** (`export_web.sh`): headless release export into a clean
+  `build/web/` and zips it to `build/dronesim-web.zip` with `index.html` at
+  the zip root for itch.io. Upload flow (draft visibility, viewport, browser
+  gamepad caveat) documented in `docs/publishing.md`.
+- **Docs site source** lives in `docs/` (`conf.py` + `index.rst` only);
+  `docs/classes/` and `docs/_build/` are generated and gitignored.
+- One-time manual steps (see `docs/publishing.md`): create the GitHub repo +
+  add the SSH remote, enable Pages (Source: GitHub Actions), first itch.io
+  draft upload.
 
 ---
 
