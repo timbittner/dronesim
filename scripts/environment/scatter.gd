@@ -1,4 +1,5 @@
 @tool
+class_name Scatter
 extends Node3D
 
 ## Scatters visual-only trees and rocks across the terrain at generation time.

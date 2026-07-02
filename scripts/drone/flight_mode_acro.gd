@@ -40,6 +40,8 @@ func _apply_expo(x: float) -> float:
 	return pitch_roll_expo * x * x * x + (1.0 - pitch_roll_expo) * x
 
 
+## Direct stick→differential mapping with an idle-floor collective and expo
+## on pitch/roll. See FlightModeBase.compute() for the parameter contract.
 func compute(
 	throttle: float,
 	pitch: float,
@@ -63,5 +65,6 @@ func compute(
 	return result
 
 
+## Mode name shown in the HUD.
 func get_mode_name() -> String:
 	return "Acro"

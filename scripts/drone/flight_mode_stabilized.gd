@@ -41,6 +41,9 @@ var _filtered_ang_vel: Vector3 = Vector3.ZERO
 # --- Differential clipping limit ---
 @export var max_offset: float = 0.4
 
+## Rate-PD when the stick is deflected, world-frame angle-PD auto-level when
+## released (hard switch at input_deadzone — see AGENTS.md Known Issues).
+## See FlightModeBase.compute() for the parameter contract.
 func compute(
 	throttle: float,
 	pitch: float,
@@ -115,5 +118,6 @@ func compute(
 	return result
 
 
+## Mode name shown in the HUD.
 func get_mode_name() -> String:
 	return "Stabilized"

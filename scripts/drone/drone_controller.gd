@@ -6,8 +6,13 @@ extends RigidBody3D
 ## Per-rotor thrust vectoring: each rotor applies force at its arm position.
 ## Mode 2 layout: left stick = throttle/yaw, right stick = pitch/roll.
 
+## Emitted when the pilot toggles between acro and stabilized (L1).
 signal flight_mode_changed(mode_name: String)
+## Emitted when the pilot toggles the FPV camera (R1).
 signal fpv_toggled(enabled: bool)
+## Emitted once at the moment a hard impact kills the "signal" (see _crash()).
+## Environment-side observers (CrashEffects, HUD) react; the controller itself
+## only owns the FLYING → CRASHED state change.
 signal crash_detected
 
 # --- Thrust ---
@@ -464,6 +469,8 @@ func _toggle_fpv() -> void:
 	print("[Drone] FPV: ", _fpv_enabled)
 
 
+## Teleport back to the spawn pad with zeroed velocities (Triangle). Also the
+## only way to recover from a CRASHED / SIGNAL LOST state.
 func reset() -> void:
 	linear_velocity = Vector3.ZERO
 	angular_velocity = Vector3.ZERO
@@ -473,13 +480,17 @@ func reset() -> void:
 	print("[Drone] Reset to spawn")
 
 
+## Current mode name as reported by the active FlightModeBase ("Acro"/"Stabilized").
 func get_flight_mode() -> String:
 	return _flight_mode
 
 
+## Whether the FPV camera view is active (vs. the chase camera).
 func is_fpv_enabled() -> bool:
 	return _fpv_enabled
 
 
+## Whether the drone is in the CRASHED / SIGNAL LOST state (rotors dead,
+## inputs ignored except reset and camera toggle).
 func is_crashed() -> bool:
 	return _state == State.CRASHED
