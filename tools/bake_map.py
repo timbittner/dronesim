@@ -45,9 +45,12 @@ N_MIN, N_MAX = 5740090, 5742490
 TILES_E, TILES_N = range(569, 573), range(5740, 5743)
 MOSAIC_E0, MOSAIC_N1 = 569000, 5743000  # west edge / north edge of tile mosaic
 
-# Flat open field between Sebexen and the forest to the north, picked from the
-# DEM (<0.7 m relief over 20 m) at ~200 m from the nearest building.
-SPAWN_E, SPAWN_N = 571000, 5741650
+# Flat open field between Sebexen and the forest to the north. Originally
+# picked from the DEM; moved 2026-07 to the user's preferred in-game spot
+# (was local [-269.521, -400.334] under the old origin) — the flatten pass
+# forces a pad here regardless of underlying relief, so exact flatness at
+# pick time no longer matters.
+SPAWN_E, SPAWN_N = 570730, 5742050
 
 CELL = 2.0  # meters per grid cell (DGM1 native 1 m, downsampled 2:1)
 
@@ -225,8 +228,11 @@ def main() -> None:
     spawn_col = round((0 - meta["origin_x"]) / CELL)
     spawn_row = round((0 - meta["origin_z"]) / CELL)
     assert abs(grid[spawn_row, spawn_col]) < 0.01, "spawn ground must be ~0"
+    # Not required to be dead flat here: OsmTerrain flattens the pad at
+    # runtime (osm_terrain.gd::_flatten_spawn_pad) regardless of raw relief.
+    # This just guards against picking a spot on a cliff/building by mistake.
     patch = grid[spawn_row - 5:spawn_row + 5, spawn_col - 5:spawn_col + 5]
-    assert patch.max() - patch.min() < 1.0, "spawn area must be flat"
+    assert patch.max() - patch.min() < 5.0, "spawn area too steep for the flatten pass"
     counts = {c: int((classmap == c).sum()) for c in range(4)}
     assert all(counts[c] > 0 for c in range(4)), counts
     assert len(buildings) > 600, len(buildings)

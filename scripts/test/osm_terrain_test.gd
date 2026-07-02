@@ -107,8 +107,8 @@ func test_collision_matches_get_height() -> bool:
 	var space := get_world_3d().direct_space_state
 	var ok := true
 	# Spread across the map, away from buildings' trimesh (open field/forest).
-	for pos in [Vector2(0, 0), Vector2(300, 400), Vector2(-800, -500),
-			Vector2(1200, 900), Vector2(-1400, 1300)]:
+	for pos in [Vector2(0, 0), Vector2(300, 400), Vector2(-800, 300),
+			Vector2(1200, 900), Vector2(-1200, 1300)]:
 		var expected: float = _terrain.get_height(pos.x, pos.y)
 		var query := PhysicsRayQueryParameters3D.create(
 			Vector3(pos.x, expected + 200.0, pos.y),

@@ -1,3 +1,4 @@
+@tool
 class_name OsmTerrain
 extends Node3D
 
@@ -8,8 +9,9 @@ extends Node3D
 ##
 ## Local frame: origin = spawn point (flattened pad, like the procedural
 ## terrain), x = east, z = south. Heights are meters above the spawn pad.
-## Not @tool: building ~1M triangles on every editor scene load isn't worth
-## the preview; run the scene to see the map.
+## @tool for in-editor inspection: the terrain mesh alone is ~1M triangles
+## (mesh_step 4m over the full grid), so expect a beat of lag whenever this
+## scene (re)opens in the editor. Bump mesh_step if that gets annoying.
 
 @export var map_dir: String = "res://assets/maps/sebexen"
 ## Meters between terrain mesh vertices. Snapped to a whole number of grid
@@ -38,6 +40,11 @@ var _meta: Dictionary
 
 
 func _ready() -> void:
+	# Editor re-enters _ready on every reload; clear last run's generated
+	# children first or they'd stack up as duplicate overlapping meshes.
+	for c in get_children():
+		remove_child(c)
+		c.free()
 	var t0 := Time.get_ticks_msec()
 	_load_map()
 	_flatten_spawn_pad()
@@ -362,6 +369,10 @@ func _build_buildings() -> void:
 	var mat := StandardMaterial3D.new()
 	mat.vertex_color_use_as_albedo = true
 	mat.roughness = 0.85
+	# OSM ring winding isn't reliable enough to trust for backface culling
+	# across 628 footprints — cheaper to draw both sides than chase per-building
+	# winding bugs (was rendering as 2 walls + a roof on many houses).
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	mesh.surface_set_material(0, mat)
 
 	var mi := MeshInstance3D.new()
