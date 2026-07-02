@@ -12,7 +12,12 @@ GitHub upstream with CI (`.github/workflows/ci.yml`), MIT license, JSONL
 flight telemetry (`FlightRecorder`), an itch.io web export (`export_web.sh`,
 `docs/publishing.md`), and a GitHub Pages class reference generated from
 GDScript `##` doc comments — keep public members documented; the docs CI job
-fails on malformed doc comments (bare `[...]` parses as BBCode).
+fails on malformed doc comments (bare `[...]` parses as BBCode). **P4
+real-world terrain**: `main.tscn` now flies over the Sebexen valley (Lower
+Saxony), baked offline from LGLN DGM1 elevation + OSM data by
+`tools/bake_map.py` into `assets/maps/sebexen/` and loaded at runtime by
+`OsmTerrain` (heightmap mesh + collision, road/water/forest classes,
+MultiMesh pine forest, extruded buildings).
 See `PROJECT_SUMMARY.md` for detailed architecture and tuning parameters.
 
 ## Tech Stack
@@ -33,11 +38,13 @@ See `PROJECT_SUMMARY.md` for detailed architecture and tuning parameters.
 scenes/
   main.tscn              Root scene
   drone/drone.tscn        Drone instance
-  environment/terrain.tscn
+  environment/terrain.tscn      Procedural terrain (retired from main, P4)
+  environment/osm_terrain.tscn  Real-world Sebexen map (in main since P4)
   test/                   Headless test scenes
     flight_mode_test_scene.tscn
     wind_test_scene.tscn
     flight_recorder_test_scene.tscn
+    osm_terrain_test_scene.tscn
 scripts/
   drone/
     drone_controller.gd          Core controller — input, mixer, damping,
@@ -54,7 +61,8 @@ scripts/
   camera/
     chase_camera.gd              FPV + chase camera (FPV rotation smoothed)
   environment/
-    terrain_generator.gd         Procedural noise terrain
+    terrain_generator.gd         Procedural noise terrain (retired from main)
+    osm_terrain.gd               Real-world terrain from baked map assets (P4)
     crash_effects.gd             Dust burst on crash (listens to crash_detected)
     wind_field.gd                Terrain-aware prevailing wind (group "wind_field")
     wind_particles.gd            Advected wind-streak MultiMesh (child of WindField)
@@ -66,8 +74,14 @@ scripts/
     flight_mode_test.gd          15 headless tests
     wind_field_test.gd           6 headless wind-field tests
     flight_recorder_test.gd      3 headless telemetry tests
+    osm_terrain_test.gd          6 headless map/terrain tests (P4)
     mock_hill_terrain.gd         Deterministic terrain stand-in for wind tests
+tools/
+  bake_map.py                    Offline DGM1+OSM → baked map assets (P4);
+                                 inputs in tools/map_sources/ (gitignored)
 assets/
+  maps/sebexen/                  Baked map: heightmap.bin, classmap.bin,
+                                 map.json (checked in; see bake_map.py header)
   materials/
   models/
     drone_parts.blend            Source: full drone (body, 4 arms, 4 props)
@@ -174,10 +188,33 @@ camera-relative HUD arrow in `debug_hud.gd` (same projection as the axis
 gizmo) showing the ambient wind at the drone, with size/alpha scaling by
 speed and an `m/s` readout, dimming on crash like the rest of the telemetry.
 
+### Real-world terrain (P4)
+
+`main.tscn`'s `Terrain` node is now `OsmTerrain`
+(`scripts/environment/osm_terrain.gd`), which loads baked assets from
+`assets/maps/sebexen/` — a float32 heightmap grid (2 m cells, 3.4 × 2.4 km of
+the Sebexen valley from LGLN DGM1 lidar), a uint8 land-class grid
+(field/forest/water/road rasterized from OSM), and building footprints in
+`map.json`. The local frame's origin is the spawn point (a flat field NE of
+the village); the pad flatten is applied to the loaded grid itself so mesh,
+collision (`HeightMapShape3D`, full-res) and `get_height()` agree by
+construction. `get_height(x, z)` keeps the same duck-typed contract as
+`TerrainGenerator`, so `WindField` shapes wind around the real ridges with no
+changes. The bake is offline and one-time: `tools/bake_map.py` (see its
+header for the venv setup and the no-API-key DGM1 tile download); raw inputs
+live in `tools/map_sources/` (gitignored), baked outputs are checked in.
+`export_presets.cfg` needs `include_filter="assets/maps/*"` because `.bin`/
+`.json` are not Godot resources — without it the web export ships no map.
+
+The procedural `TerrainGenerator` + `Scatter` (`terrain.tscn`) are retired
+from `main.tscn` but kept working for reference; wind tests still use
+`mock_hill_terrain.gd`.
+
 ### Extension Points
 
 - **Flight modes:** New modes implement `FlightModeBase.compute()` interface
-- **Terrain generator:** Pluggable backend (noise-based now, OSM-based later)
+- **Terrain:** any node named `Terrain` exposing `get_height(x, z)` works;
+  new real-world areas = new baked map dir + `map_dir` export
 - **Drone scene:** Single drone now, instanced for swarm later
 - **Input mapping:** Godot InputMap actions, not hardcoded device codes
 
@@ -250,9 +287,12 @@ The `_rotor_positions` array order is `[FL, FR, BL, BR]` and the mixer output
 - Godot editor must be open when using MCP tools (auto-import on file changes)
 - GDScript files can be edited externally; Godot reloads on focus
 - Scene files (.tscn) should be edited in the Godot editor unless making targeted text edits
-- **Run tests:** `./run_tests.sh` (all three headless suites; new
+- **Run tests:** `./run_tests.sh` (all four headless suites; new
   `class_name`s need a `godot --headless --path . --import` first if the
   editor isn't open to refresh the global class cache)
+- **Re-bake the map** (only when map data/extent/spawn changes):
+  `.venv/bin/python tools/bake_map.py` — see the script header for venv
+  setup and DGM1 tile downloads
 - **Run game:** F6 in editor or `godot --path .`
 - **Web export:** `./export_web.sh` → `build/dronesim-web.zip` (itch.io flow
   in `docs/publishing.md`)
@@ -323,3 +363,8 @@ correct-looking `project.godot` entry, check this first.
 ## License
 
 Private project. No license file needed yet.
+
+Map data attribution (also embedded in `assets/maps/sebexen/map.json`):
+elevation © LGLN Niedersachsen (DGM1, dl-de/by-2-0); map features
+© OpenStreetMap contributors (ODbL). Keep these credits with any published
+build that ships the Sebexen map.

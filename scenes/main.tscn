@@ -2,7 +2,7 @@
 
 [ext_resource type="PackedScene" uid="uid://5jri1ism1wee" path="res://scenes/drone/drone.tscn" id="1_drone_scene"]
 [ext_resource type="Script" uid="uid://drcgnp0heelc5" path="res://scripts/camera/chase_camera.gd" id="2_chase_cam"]
-[ext_resource type="PackedScene" path="res://scenes/environment/terrain.tscn" id="3_terrain"]
+[ext_resource type="PackedScene" path="res://scenes/environment/osm_terrain.tscn" id="3_terrain"]
 [ext_resource type="Script" uid="uid://c6kocm2px6681" path="res://scripts/ui/debug_hud.gd" id="4_debug_hud"]
 [ext_resource type="Script" path="res://scripts/environment/crash_effects.gd" id="5_crash_fx"]
 [ext_resource type="Script" path="res://scripts/environment/wind_field.gd" id="6_wind_field"]

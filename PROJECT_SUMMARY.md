@@ -1,7 +1,7 @@
 # DroneSim — Project Summary
 
 A 3D drone flight simulator in **Godot 4.7 / GDScript** with **Jolt Physics**.
-Single drone, flyable with a PS5 DualSense controller. Procedural terrain,
+Single drone, flyable with a PS5 DualSense controller. Real-world terrain,
 chase/FPV cameras, debug HUD.
 
 Current phase: **Per-rotor thrust vectoring complete**, plus **Phase B assisted
@@ -13,7 +13,11 @@ terrain-aware prevailing wind field pushes the drone via relative-airspeed
 drag, visualized with advected streak particles and a HUD wind arrow. **P3
 project health** adds GitHub upstream (README, MIT, CI), JSONL flight
 telemetry, an itch.io web export, and a generated GitHub Pages class
-reference. 15 + 6 + 3 headless tests pass.
+reference. **P4 real-world terrain** replaces the procedural map with the
+Sebexen valley (Lower Saxony), baked offline from LGLN DGM1 elevation data
+and an OSM extract: heightmap terrain, road/water/forest surface classes, a
+MultiMesh pine forest, and 628 extruded building footprints.
+15 + 6 + 3 + 6 headless tests pass.
 
 ---
 
@@ -21,8 +25,9 @@ reference. 15 + 6 + 3 headless tests pass.
 
 ```
 Main (Node3D)
-├── Terrain (Node3D)
-│   └── [TerrainMesh, TerrainBody]
+├── Terrain (Node3D)               # OsmTerrain — real-world Sebexen map (P4)
+│   └── [TerrainMesh, TerrainBody, ForestTrunks, ForestCanopies,
+│        Buildings, BuildingsBody]  (built at runtime from baked assets)
 ├── SpawnPad (MeshInstance3D)
 ├── DirectionalLight3D
 ├── WorldEnvironment
@@ -339,6 +344,69 @@ In-sim replay/scrubbing is backlog, not built.
 | Reset rotates log file | `reset()` closes the old file and opens a fresh one |
 
 Run: `godot --headless --path . scenes/test/flight_recorder_test_scene.tscn`
+
+---
+
+## Real-World Terrain (P4)
+
+### Offline bake — `tools/bake_map.py`
+
+One-time Python step (inputs gitignored, outputs checked in). Converts 12
+LGLN **DGM1** elevation tiles (1 m grid, EPSG:25832, free direct download —
+tile URLs come from the LGLN ArcGIS tile-index FeatureServer, see script
+header) plus an **OSM extract** into `assets/maps/sebexen/`:
+
+- `heightmap.bin` — float32 LE grid, 1701×1201 @ 2 m cells (3.4 × 2.4 km),
+  row 0 = north; heights relative to the spawn point (pad = 0).
+- `classmap.bin` — uint8 land class per cell: 0 field, 1 forest, 2 water,
+  3 road (rasterized from OSM polygons/polylines with Pillow; multipolygon
+  forest relations get their outer rings stitched).
+- `map.json` — grid metadata, UTM anchors, 628 building footprints (local
+  meters + height), and the LGLN/OSM attribution strings.
+
+Local frame: origin = spawn (a flat field at UTM 571000 E, 5741650 N between
+the village and the forest to the north), x = east, z = south. lat/lon →
+UTM32 uses pyproj — an equirectangular approximation would misalign OSM
+features against the DEM by ~20 m at map edges (UTM grid convergence ≈0.8°).
+
+### `scripts/environment/osm_terrain.gd` — Runtime (`OsmTerrain`)
+
+Node named `Terrain` in `main.tscn` (swapped in for the procedural
+`TerrainGenerator`, which remains for reference/tests). Duck-type compatible:
+`get_height(x, z)` (bilinear, edge-clamped) keeps `WindField` working
+unchanged. Builds on `_ready()` (~2 s, not `@tool`):
+
+- **Terrain mesh**: one vertex-colored ArrayMesh at `mesh_step` (4 m default)
+  with analytic normals; per-vertex land class is max-pooled over the covered
+  cells so 2-cell-wide roads don't alias into dashes on the coarser lattice.
+  Water vertices are dropped 0.4 m for a visible channel.
+- **Collision**: `HeightMapShape3D` fed the full-res grid directly
+  (same pattern as TerrainGenerator), XZ-recentered on the map rect.
+- **Spawn pad**: the grid itself is flattened radially around the origin at
+  load (same smoothstep profile as TerrainGenerator), so mesh, collision and
+  `get_height` agree by construction.
+- **Forest**: two MultiMeshes (trunks + canopy cones) sampled onto forest
+  cells, `tree_density_per_km2 = 3000` (~6 k trees) — Scatter's per-node
+  trees can't cover ~2 km² of real forest.
+- **Buildings**: all footprints extruded (walls + flat roof, winding
+  normalized via shoelace area) into one ArrayMesh + one trimesh
+  StaticBody3D. Default height 6 m (extract has no `building:levels`).
+
+`export_presets.cfg` has `include_filter="assets/maps/*"` — the baked files
+are not Godot resources and would otherwise be dropped from the web export.
+
+### `scripts/test/osm_terrain_test.gd` — Terrain Headless Test Harness (P4)
+
+| Test | Verification |
+|---|---|
+| Map loads with expected dims | grid/class sizes match map.json; mesh/body/buildings nodes exist |
+| Spawn pad flat at zero | \|height\| < 0.01 m inside `flat_radius` |
+| get_height matches baked grid | bilinear sample equals raw file values at grid points |
+| All land classes present | field/forest/water/road all seen in classmap |
+| Collision matches get_height | physics raycasts hit within 0.5 m of `get_height` at 5 spots |
+| Buildings built with collision | building mesh AABB/vert count sane, trimesh body exists |
+
+Run: `godot --headless --path . scenes/test/osm_terrain_test_scene.tscn`
 
 ---
 

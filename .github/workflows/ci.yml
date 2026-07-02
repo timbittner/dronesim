@@ -34,6 +34,9 @@ jobs:
       - name: Flight recorder tests
         run: ./godot-bin --headless --path . scenes/test/flight_recorder_test_scene.tscn
 
+      - name: OSM terrain tests
+        run: ./godot-bin --headless --path . scenes/test/osm_terrain_test_scene.tscn
+
   # Class reference generated from GDScript ## doc comments → GitHub Pages.
   # One-time repo setting required: Settings → Pages → Source: GitHub Actions.
   docs:
