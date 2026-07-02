@@ -168,17 +168,17 @@ func _format_telemetry(t: Dictionary) -> String:
 	if t["brake_engaged"]:
 		assist += "BRAKE"
 	return (
-		"═══ DRONE TELEMETRY ═══\n"
+		"=== DRONE TELEMETRY ===\n"
 		+ "Flight Mode : %s\n" % t["flight_mode"].to_upper()
 		+ "FPV         : %s\n" % ("ON" if t["fpv_enabled"] else "OFF")
-		+ "Assist      : %s\n" % (assist if not assist.is_empty() else "—")
-		+ "─────────────────────\n"
+		+ "Assist      : %s\n" % (assist if not assist.is_empty() else "-")
+		+ "-----------------------\n"
 		+ "Throttle    : %5.1f%%\n" % t["throttle_pct"]
 		+ "Pitch stick : %+0.2f\n" % t["pitch_stick"]
 		+ "Roll stick  : %+0.2f\n" % t["roll_stick"]
 		+ "Yaw stick   : %+0.2f\n" % t["yaw_stick"]
 		+ "Thr stick   : %+0.2f\n" % t["throttle_stick"]
-		+ "─────────────────────\n"
+		+ "-----------------------\n"
 		+ "Heading     : %6.1f°\n" % t["heading_deg"]
 		+ "Pitch angle : %+6.1f°\n" % t["pitch_deg"]
 		+ "Roll angle  : %+6.1f°\n" % t["roll_deg"]
@@ -224,7 +224,6 @@ func _build_ui() -> void:
 
 	_label = Label.new()
 	_label.add_theme_font_size_override("font_size", 13)
-	_try_load_monospace_font(_label)
 	_label.set_anchors_preset(Control.PRESET_TOP_LEFT)
 	_label.offset_left = 14.0
 	_label.offset_top = 14.0
@@ -252,7 +251,6 @@ func _build_ui() -> void:
 
 	_coord_label = Label.new()
 	_coord_label.add_theme_font_size_override("font_size", 11)
-	_try_load_monospace_font(_coord_label)
 	_coord_label.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
 	_coord_label.offset_left = 6.0
 	_coord_label.offset_bottom = -6.0
@@ -278,7 +276,6 @@ func _build_ui() -> void:
 
 	_wind_label = Label.new()
 	_wind_label.add_theme_font_size_override("font_size", 11)
-	_try_load_monospace_font(_wind_label)
 	_wind_label.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
 	_wind_label.offset_left = 6.0
 	_wind_label.offset_bottom = -6.0
@@ -289,9 +286,8 @@ func _build_ui() -> void:
 	_wind_panel.add_child(_wind_label)
 
 	_signal_lost_label = Label.new()
-	_signal_lost_label.text = "⚠ SIGNAL LOST"
+	_signal_lost_label.text = "SIGNAL LOST"
 	_signal_lost_label.add_theme_font_size_override("font_size", 48)
-	_try_load_monospace_font(_signal_lost_label)
 	_signal_lost_label.add_theme_color_override("font_color", Color(1.0, 0.15, 0.1))
 	_signal_lost_label.add_theme_color_override("font_outline_color", Color(0, 0, 0))
 	_signal_lost_label.add_theme_constant_override("outline_size", 6)
@@ -404,14 +400,3 @@ func _on_wind_draw() -> void:
 	for seg in segments:
 		_wind_canvas.draw_line(seg[0], seg[1], color, 6.0, false)
 	_wind_canvas.draw_circle(tip, 3.0, color)
-
-
-func _try_load_monospace_font(label: Label) -> void:
-	for font_path in ["res://assets/fonts/mono.woff2", "res://assets/fonts/mono.ttf", "res://assets/fonts/monospace.ttf"]:
-		if not FileAccess.file_exists(font_path):
-			continue
-		var mono_font := FontFile.new()
-		mono_font.load_dynamic_font(font_path)
-		if not mono_font.data.is_empty():
-			label.add_theme_font_override("font", mono_font)
-			return
