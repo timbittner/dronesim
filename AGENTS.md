@@ -283,15 +283,6 @@ correct-looking `project.godot` entry, check this first.
 
 ## Known Issues
 
-- **DualSense not detected in the web build on macOS** — confirmed not a
-  Godot/project bug: a plain JS test page (hardwaretester.com, no Godot
-  involved) also fails to see the controller in the same browser session.
-  This is a macOS + browser + Bluetooth DualSense Gamepad-API limitation
-  outside this project's control. If it comes up again: try wired
-  USB-C instead of Bluetooth, and/or Chrome instead of Safari — both are
-  commonly more reliable for DualSense's non-standard HID mapping. The
-  native desktop build (SDL-based, not the browser Gamepad API) is
-  unaffected.
 - **Roll→yaw coupling during aggressive dives** — real physics effect
   (pitching hard at high throttle briefly deflects yaw), not currently
   compensated. The headless test for this

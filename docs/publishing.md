@@ -46,5 +46,10 @@ Upload (first time):
 Per milestone afterwards: re-run `./export_web.sh`, replace the zip on the
 project's Edit page.
 
-Note: a gamepad is only detected by browsers after a button press inside the
-page; click the canvas first, then press any button on the controller.
+Notes:
+- A gamepad is only detected by browsers after a button press inside the
+  page; click the canvas first, then press any button on the controller.
+- DualSense over Bluetooth on macOS is not reliably detected in **Safari**
+  (confirmed independent of this project — a plain JS Gamepad-API test page
+  fails identically); **Chrome** detects it fine. Recommend Chrome for the
+  itch.io page.
