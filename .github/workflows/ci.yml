@@ -22,14 +22,8 @@ jobs:
           mv "Godot_v${GODOT_VERSION}_linux.x86_64" godot-bin
 
       # CI has no .godot/ cache; scenes won't load without imported resources.
-      # The first pass only discovers files and queues GLB/GLTF import; a
-      # second pass is needed to actually produce the .godot/imported/*.scn
-      # files, or preload()ing them (drone_controller.gd) fails at parse time
-      # and cascades into every test (Drone silently loses its script).
       - name: Import resources
-        run: |
-          ./godot-bin --headless --path . --import
-          ./godot-bin --headless --path . --import
+        run: ./godot-bin --headless --path . --import
 
       - name: Flight mode tests
         run: ./godot-bin --headless --path . scenes/test/flight_mode_test_scene.tscn
@@ -62,10 +56,6 @@ jobs:
 
       - name: Dump class XML
         run: |
-          # Two passes — see the "Import resources" comment in the tests job.
-          # No `|| true`: a failed import here silently drops DroneController
-          # from the doc dump and every class referencing it fails to resolve.
-          ./godot-bin --headless --path . --import
           ./godot-bin --headless --path . --import
           # Project classes from ## doc comments
           mkdir -p /tmp/docxml
