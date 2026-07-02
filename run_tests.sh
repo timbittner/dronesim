@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs the headless flight-mode test suite.
+# Runs the headless test suites.
 # Locates the Godot binary via PATH, falling back to the macOS .app bundle.
 set -euo pipefail
 
@@ -15,4 +15,12 @@ else
   exit 1
 fi
 
-"$GODOT_BIN" --headless --path "$SCRIPT_DIR" scenes/test/flight_mode_test_scene.tscn
+status=0
+
+echo "=== Flight mode test suite ==="
+"$GODOT_BIN" --headless --path "$SCRIPT_DIR" scenes/test/flight_mode_test_scene.tscn || status=1
+
+echo "=== Wind field test suite ==="
+"$GODOT_BIN" --headless --path "$SCRIPT_DIR" scenes/test/wind_test_scene.tscn || status=1
+
+exit $status

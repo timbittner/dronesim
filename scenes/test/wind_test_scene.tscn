@@ -1,0 +1,21 @@
+[gd_scene format=3]
+
+[ext_resource type="PackedScene" uid="uid://5jri1ism1wee" path="res://scenes/drone/drone.tscn" id="1_drone_scene"]
+[ext_resource type="Script" path="res://scripts/test/wind_field_test.gd" id="2_test_script"]
+[ext_resource type="Script" path="res://scripts/test/mock_hill_terrain.gd" id="3_terrain_script"]
+[ext_resource type="Script" path="res://scripts/environment/wind_field.gd" id="4_wind_field_script"]
+
+[node name="WindFieldTest" type="Node3D"]
+script = ExtResource("2_test_script")
+
+[node name="Drone" parent="." instance=ExtResource("1_drone_scene")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0)
+
+[node name="Terrain" type="Node3D" parent="."]
+script = ExtResource("3_terrain_script")
+
+[node name="WindField" type="Node3D" parent="."]
+script = ExtResource("4_wind_field_script")
+wind_direction_deg = 90.0
+turbulence_strength = 0.0
+direction_wobble_deg = 0.0
