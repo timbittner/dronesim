@@ -361,7 +361,9 @@ func _compute_and_apply_forces(delta: float) -> void:
 ## throttle cut — if the user commands zero collective, all rotors go to zero.
 const MIN_ROTOR: float = 0.02
 
-## Convert collective + differentials to per-rotor throttles with anti-clip scaling.
+## Convert collective + differentials to per-rotor throttles with anti-clip
+## scaling AND a uniform-shift ceiling (see the two comments below) — this is
+## the same two-stage approach real flight-controller mixers use.
 static func _mix_rotors(collective: float, pitch: float, roll: float) -> FlightModeBase.RotorMix:
 	# Throttle cut: user commanded zero power, all rotors off.
 	if collective < 0.001:
@@ -372,30 +374,61 @@ static func _mix_rotors(collective: float, pitch: float, roll: float) -> FlightM
 		cut_result.br = 0.0
 		return cut_result
 
-	# Anti-clip scaling: prevent differentials from pushing any rotor below
-	# MIN_ROTOR (or above 1.0) while preserving the pitch/roll ratio.
 	var total_correction: float = absf(pitch) + absf(roll)
-	var headroom: float = minf(collective - MIN_ROTOR, 1.0 - collective)
 	var clipped_pitch: float = pitch
 	var clipped_roll: float = roll
-	if total_correction > headroom and total_correction > 0.001:
-		var clip_scale: float = headroom / total_correction
-		clipped_pitch *= clip_scale
-		clipped_roll *= clip_scale
 
-	var result := FlightModeBase.RotorMix.new()
+	if total_correction > 0.001:
+		# Largest achievable |pitch|+|roll| "spread" for ANY uniform downward
+		# shift of the whole mix (see below): fitting a symmetric spread into
+		# [MIN_ROTOR, 1.0] costs at most half that range's width, however the
+		# shift positions it. But a downward-only shift can only ever help
+		# the ceiling — it makes the MIN_ROTOR floor worse, never better —
+		# so at low/mid collective the floor is still the tighter bound and
+		# this reduces to the old symmetric-headroom formula unchanged; only
+		# past the crossover (roughly collective > 0.5) does the shift buy
+		# more spread than before, which is exactly the case that used to
+		# clip all differential to zero at 100% throttle.
+		var max_spread: float = minf(collective - MIN_ROTOR, (1.0 - MIN_ROTOR) * 0.5)
+		if total_correction > max_spread:
+			var clip_scale: float = max_spread / total_correction
+			clipped_pitch *= clip_scale
+			clipped_roll *= clip_scale
+
 	# FL/FR are at the nose (−Z), BL/BR at the tail (+Z); FL/BL are on the left
 	# (−X). Positive pitch = nose up → front rotors get more thrust. Positive
 	# roll = roll right → left rotors get more thrust. (See AGENTS.md.)
-	result.fl = collective + clipped_pitch + clipped_roll
-	result.fr = collective + clipped_pitch - clipped_roll
-	result.bl = collective - clipped_pitch + clipped_roll
-	result.br = collective - clipped_pitch - clipped_roll
-	# Final clamp: MIN_ROTOR only applies when collective is on (throttle not cut)
-	result.fl = clampf(result.fl, MIN_ROTOR, 1.0)
-	result.fr = clampf(result.fr, MIN_ROTOR, 1.0)
-	result.bl = clampf(result.bl, MIN_ROTOR, 1.0)
-	result.br = clampf(result.br, MIN_ROTOR, 1.0)
+	var fl: float = collective + clipped_pitch + clipped_roll
+	var fr: float = collective + clipped_pitch - clipped_roll
+	var bl: float = collective - clipped_pitch + clipped_roll
+	var br: float = collective - clipped_pitch - clipped_roll
+
+	# Uniform downward shift: if the differential still pushes the highest
+	# rotor past 1.0 (i.e. collective itself was high), bring ALL FOUR down
+	# by the overshoot — trading a little collective (climb rate) for full
+	# pitch/roll authority, rather than the old behavior of clipping the
+	# differential to zero the instant any single rotor would exceed 1.0.
+	# Only ever shifts down, never up — never silently adds thrust beyond
+	# what was commanded. With zero differential (pitch = roll = 0) the
+	# highest rotor is just `collective` itself, which never exceeds 1.0, so
+	# this never triggers and max climb rate at full throttle with a
+	# centered stick is unaffected.
+	var highest: float = maxf(maxf(fl, fr), maxf(bl, br))
+	if highest > 1.0:
+		var shift: float = highest - 1.0
+		fl -= shift
+		fr -= shift
+		bl -= shift
+		br -= shift
+
+	var result := FlightModeBase.RotorMix.new()
+	# Final clamp is a safety net — the math above should already land inside
+	# [MIN_ROTOR, 1.0], but combined inputs from multiple sources (mode +
+	# brake) aren't otherwise bounded before reaching this function.
+	result.fl = clampf(fl, MIN_ROTOR, 1.0)
+	result.fr = clampf(fr, MIN_ROTOR, 1.0)
+	result.bl = clampf(bl, MIN_ROTOR, 1.0)
+	result.br = clampf(br, MIN_ROTOR, 1.0)
 	return result
 
 
