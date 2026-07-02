@@ -6,7 +6,7 @@ per-rotor thrust physics, terrain-aware wind, crashes with signal loss,
 JSONL flight telemetry. Flyable with a PS5 DualSense controller or keyboard.
 
 - `Source on GitHub <https://github.com/timbittner/dronesim>`_
-- Playable browser build on itch.io *(draft — link coming soon)*
+- `Playable browser build on itch.io <https://bitona.itch.io/dronesim>`_ *(currently in draft — not visible until published)*
 - `How releases are published <https://github.com/timbittner/dronesim/blob/main/docs/publishing.md>`_
 
 The class reference below is generated from the GDScript doc comments on
