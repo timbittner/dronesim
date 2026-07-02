@@ -30,3 +30,6 @@ jobs:
 
       - name: Wind field tests
         run: ./godot-bin --headless --path . scenes/test/wind_test_scene.tscn
+
+      - name: Flight recorder tests
+        run: ./godot-bin --headless --path . scenes/test/flight_recorder_test_scene.tscn

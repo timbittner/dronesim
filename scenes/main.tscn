@@ -7,6 +7,7 @@
 [ext_resource type="Script" path="res://scripts/environment/crash_effects.gd" id="5_crash_fx"]
 [ext_resource type="Script" path="res://scripts/environment/wind_field.gd" id="6_wind_field"]
 [ext_resource type="Script" path="res://scripts/environment/wind_particles.gd" id="7_wind_particles"]
+[ext_resource type="Script" path="res://scripts/environment/flight_recorder.gd" id="8_flight_recorder"]
 
 [sub_resource type="BoxMesh" id="BoxMesh_pad"]
 size = Vector3(2, 0.1, 2)
@@ -65,6 +66,9 @@ script = ExtResource("5_crash_fx")
 
 [node name="WindField" type="Node3D" parent="."]
 script = ExtResource("6_wind_field")
+
+[node name="FlightRecorder" type="Node" parent="."]
+script = ExtResource("8_flight_recorder")
 
 [node name="WindParticles" type="MultiMeshInstance3D" parent="WindField"]
 script = ExtResource("7_wind_particles")

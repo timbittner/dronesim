@@ -23,4 +23,7 @@ echo "=== Flight mode test suite ==="
 echo "=== Wind field test suite ==="
 "$GODOT_BIN" --headless --path "$SCRIPT_DIR" scenes/test/wind_test_scene.tscn || status=1
 
+echo "=== Flight recorder test suite ==="
+"$GODOT_BIN" --headless --path "$SCRIPT_DIR" scenes/test/flight_recorder_test_scene.tscn || status=1
+
 exit $status

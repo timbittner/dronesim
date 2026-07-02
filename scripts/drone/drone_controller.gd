@@ -14,6 +14,9 @@ signal fpv_toggled(enabled: bool)
 ## Environment-side observers (CrashEffects, HUD) react; the controller itself
 ## only owns the FLYING → CRASHED state change.
 signal crash_detected
+## Emitted after a reset() teleports back to spawn — one "flight" ended and a
+## new one began (FlightRecorder rotates its log file on this).
+signal drone_reset
 
 # --- Thrust ---
 @export var max_thrust: float = 17.5  # Newtons per rotor (35% of previous 50.0)
@@ -81,6 +84,11 @@ var _flight_mode: String = "acro"
 ## 0..100 percentage. This is the actual commanded thrust, not a recomputed
 ## approximation — read by the HUD instead of re-deriving it independently.
 var thrust_percent: float = 0.0
+
+## Last applied per-rotor mix [fl, fr, bl, br] (post anti-clip/idle clamping),
+## 0..1 each. Same expose-for-observer pattern as thrust_percent — read by
+## FlightRecorder; the commanded rotor outputs aren't observable from outside.
+var last_mix: Array[float] = [0.0, 0.0, 0.0, 0.0]
 
 # Authored in Blender (assets/models/drone_parts.blend), exported as GLB.
 # See AGENTS.md "Coordinate System" for how Blender axes map to Godot.
@@ -296,6 +304,7 @@ func _crash(momentum: float) -> void:
 	_altitude_hold_engaged = false
 	_brake_engaged = false
 	thrust_percent = 0.0
+	last_mix = [0.0, 0.0, 0.0, 0.0]
 	_set_armed(false)  # motors dead — props stop
 	crash_detected.emit()
 	print("[Drone] CRASH — signal lost (impact momentum %.1f kg·m/s)" % momentum)
@@ -338,6 +347,7 @@ func _compute_and_apply_forces(delta: float) -> void:
 
 	var up: Vector3 = global_transform.basis.y
 	var throttles: Array[float] = [mix.fl, mix.fr, mix.bl, mix.br]
+	last_mix = throttles
 	for i in range(4):
 		var force: Vector3 = up * throttles[i] * max_thrust
 		var global_pos: Vector3 = global_transform.basis * _rotor_positions[i]
@@ -477,6 +487,7 @@ func reset() -> void:
 	_prev_velocity = Vector3.ZERO
 	global_transform = _spawn_transform
 	_state = State.FLYING
+	drone_reset.emit()
 	print("[Drone] Reset to spawn")
 
 
