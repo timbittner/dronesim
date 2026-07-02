@@ -13,6 +13,18 @@ signal crash_detected
 # --- Thrust ---
 @export var max_thrust: float = 17.5  # Newtons per rotor (35% of previous 50.0)
 
+# --- Wind drag ---
+## Relative-airspeed drag: F = air_drag_coefficient * (wind_velocity - linear_velocity).
+## Replaces the old body linear_damp (see _ready()); 1.0 N·s/m at mass=2.0 kg
+## reproduces the old damp exactly in still air (wind_velocity == 0), on top of
+## the untouched engine default physics/3d/default_linear_damp = 0.1.
+@export var air_drag_coefficient: float = 1.0
+## Ambient wind sampled at the drone's position this tick (read by the HUD).
+var wind_velocity: Vector3 = Vector3.ZERO
+
+var _wind_field: Node = null
+var _wind_field_searched: bool = false
+
 # --- Crash detection ---
 ## Impact momentum (kg·m/s) above which a direct hit counts as a crash.
 ## 8.0 ≈ a 4 m/s impact at the default mass of 2.0 kg. The free-fall drop from
@@ -99,7 +111,7 @@ func _ready() -> void:
 	_spawn_transform = global_transform
 	gravity_scale = 1.0
 	angular_damp = 0.0
-	linear_damp = 0.5
+	linear_damp = 0.0  # replaced by explicit relative-airspeed drag below; engine default 0.1 remains
 
 	_gravity = ProjectSettings.get_setting("physics/3d/default_gravity")
 	hover_throttle = (mass * _gravity) / (4.0 * max_thrust)
@@ -236,6 +248,11 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func _physics_process(delta: float) -> void:
+	# Wind drag acts unconditionally — even while CRASHED, the wreck should
+	# drift downwind, same as the old engine linear_damp did.
+	wind_velocity = _sample_wind()
+	apply_central_force(air_drag_coefficient * (wind_velocity - linear_velocity))
+
 	if _state == State.FLYING:
 		_read_inputs()
 		_compute_and_apply_forces(delta)
@@ -395,6 +412,18 @@ func _set_armed(armed: bool) -> void:
 		else:
 			_rotor_nodes[i].mesh = _rotor_idle_meshes[i]
 			_rotor_nodes[i].material_override = null
+
+
+## Lazily discovers the WindField (group "wind_field") on first use — Drone
+## precedes WindField in main.tscn's tree order, so _ready() is too early.
+## No WindField in the scene (e.g. the flight-mode test scene) means zero wind.
+func _sample_wind() -> Vector3:
+	if not _wind_field_searched:
+		_wind_field_searched = true
+		_wind_field = get_tree().get_first_node_in_group("wind_field")
+	if _wind_field == null:
+		return Vector3.ZERO
+	return _wind_field.get_wind(global_position)
 
 
 func _apply_angular_damping() -> void:
