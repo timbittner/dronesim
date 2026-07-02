@@ -34,8 +34,6 @@ var _h: int
 var _cell: float
 var _origin_x: float
 var _origin_z: float
-var _h_min: float
-var _h_max: float
 var _meta: Dictionary
 
 
@@ -68,11 +66,6 @@ func _load_map() -> void:
 	_grid = FileAccess.get_file_as_bytes(map_dir + "/heightmap.bin").to_float32_array()
 	_classes = FileAccess.get_file_as_bytes(map_dir + "/classmap.bin")
 	assert(_grid.size() == _w * _h and _classes.size() == _w * _h)
-	_h_min = INF
-	_h_max = -INF
-	for v in _grid:
-		_h_min = minf(_h_min, v)
-		_h_max = maxf(_h_max, v)
 
 
 ## Flattens the grid itself around the origin (same smoothstep profile as
@@ -119,21 +112,8 @@ func get_land_class(x: float, z: float) -> int:
 	return _classes[ri * _w + ci]
 
 
-func _class_color(cls: int, normalized_h: float, slope: float) -> Color:
-	match cls:
-		CLASS_FOREST:
-			return Color(0.13, 0.24, 0.10)
-		CLASS_WATER:
-			return Color(0.15, 0.30, 0.50)
-		CLASS_ROAD:
-			return Color(0.32, 0.31, 0.30)
-	# Fields: greens drying out with altitude, rock on steep slopes.
-	var c := Color(0.30, 0.45, 0.18).lerp(Color(0.52, 0.48, 0.26), normalized_h)
-	if slope > 0.3:
-		c = c.lerp(Color(0.55, 0.52, 0.48), clampf((slope - 0.3) / 0.4, 0.0, 1.0))
-	return c
-
-
+## Ground color is baked into albedo.png (see tools/bake_map.py::build_albedo,
+## PALETTE/FIELD_LOW/FIELD_HIGH/ROCK) — this mesh only carries UVs for it.
 func _build_terrain_mesh() -> void:
 	var stride := maxi(1, roundi(mesh_step / _cell))
 	var step := stride * _cell
@@ -144,12 +124,13 @@ func _build_terrain_mesh() -> void:
 
 	var verts := PackedVector3Array()
 	var normals := PackedVector3Array()
-	var colors := PackedColorArray()
+	var uvs := PackedVector2Array()
 	verts.resize(nx * nz)
 	normals.resize(nx * nz)
-	colors.resize(nx * nz)
+	uvs.resize(nx * nz)
 
-	var h_span := maxf(_h_max - _h_min, 1.0)
+	var map_w := (_w - 1) * _cell
+	var map_h := (_h - 1) * _cell
 	for zi in nz:
 		var ri := zi * stride
 		var z := _origin_z + ri * _cell
@@ -164,7 +145,6 @@ func _build_terrain_mesh() -> void:
 			var dhdz := (_grid[i + mini(stride, _h - 1 - ri) * _w] \
 				- _grid[i - mini(stride, ri) * _w]) / (2.0 * step)
 			var vi := zi * nx + xi
-			var slope := clampf(atan(sqrt(dhdx * dhdx + dhdz * dhdz)) / (PI / 4.0), 0.0, 1.0)
 			# Max class over the cells this vertex represents, not a point
 			# sample: thin features (roads are ~2 cells wide) would otherwise
 			# alias into dashes on the coarser mesh lattice. Class values are
@@ -178,7 +158,7 @@ func _build_terrain_mesh() -> void:
 				height -= 0.4  # visible channel; collision keeps DEM height
 			verts[vi] = Vector3(x, height, z)
 			normals[vi] = Vector3(-dhdx, 1.0, -dhdz).normalized()
-			colors[vi] = _class_color(cls, (height - _h_min) / h_span, slope)
+			uvs[vi] = Vector2((x - _origin_x) / map_w, (z - _origin_z) / map_h)
 
 	var indices := PackedInt32Array()
 	indices.resize((nx - 1) * (nz - 1) * 6)
@@ -198,12 +178,17 @@ func _build_terrain_mesh() -> void:
 	arrays.resize(Mesh.ARRAY_MAX)
 	arrays[Mesh.ARRAY_VERTEX] = verts
 	arrays[Mesh.ARRAY_NORMAL] = normals
-	arrays[Mesh.ARRAY_COLOR] = colors
+	arrays[Mesh.ARRAY_TEX_UV] = uvs
 	arrays[Mesh.ARRAY_INDEX] = indices
 	var mesh := ArrayMesh.new()
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	var mat := StandardMaterial3D.new()
-	mat.vertex_color_use_as_albedo = true
+	# load(), not Image.load_from_file(): the latter reads the raw file and
+	# doesn't work in exports (Godot warns at runtime). load() goes through
+	# the normal import pipeline (mipmaps included — see the .import file;
+	# minification aliasing on thin road stripes was mip-less filtering, not
+	# geometry density).
+	mat.albedo_texture = load(map_dir + "/albedo.png") as Texture2D
 	mat.roughness = 0.9
 	mesh.surface_set_material(0, mat)
 
@@ -340,6 +325,10 @@ func _build_buildings() -> void:
 		if area > 0.0:
 			poly.reverse()
 
+		# Winding convention (Godot front faces are CLOCKWISE viewed from the
+		# front — see the terrain mesh): poly is normalized above to CW seen
+		# from +y, so roofs face up as-is and each wall's exterior is LEFT of
+		# the a→c walk; the orders below put the front face on that side.
 		st.set_color(wall_col)
 		for j in poly.size():
 			var a := poly[j]
@@ -351,28 +340,28 @@ func _build_buildings() -> void:
 			var normal := Vector3(c.y - a.y, 0.0, -(c.x - a.x)).normalized()
 			st.set_normal(normal)
 			st.add_vertex(v0)
-			st.add_vertex(v2)
 			st.add_vertex(v1)
-			st.add_vertex(v0)
-			st.add_vertex(v3)
 			st.add_vertex(v2)
+			st.add_vertex(v0)
+			st.add_vertex(v2)
+			st.add_vertex(v3)
 
-		st.set_color(roof_col)
-		st.set_normal(Vector3.UP)
-		var tri := Geometry2D.triangulate_polygon(poly)
-		for j in range(0, tri.size(), 3):
-			for k in 3:
-				var p := poly[tri[j + k]]
-				st.add_vertex(Vector3(p.x, top, p.y))
+		var footprint_area := absf(area) * 0.5
+		if poly.size() == 4 and footprint_area < 250.0:
+			_add_gable_roof(st, poly, top, wall_col, roof_col)
+		else:
+			st.set_color(roof_col)
+			st.set_normal(Vector3.UP)
+			var tri := Geometry2D.triangulate_polygon(poly)
+			for j in range(0, tri.size(), 3):
+				for k in 3:
+					var p := poly[tri[j + k]]
+					st.add_vertex(Vector3(p.x, top, p.y))
 
 	var mesh := st.commit()
 	var mat := StandardMaterial3D.new()
 	mat.vertex_color_use_as_albedo = true
 	mat.roughness = 0.85
-	# OSM ring winding isn't reliable enough to trust for backface culling
-	# across 628 footprints — cheaper to draw both sides than chase per-building
-	# winding bugs (was rendering as 2 walls + a roof on many houses).
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	mesh.surface_set_material(0, mat)
 
 	var mi := MeshInstance3D.new()
@@ -388,3 +377,66 @@ func _build_buildings() -> void:
 	var col := CollisionShape3D.new()
 	col.shape = mesh.create_trimesh_shape()
 	body.add_child(col)
+
+
+## Gable roof for a 4-corner footprint (small houses; see the area cutoff in
+## _build_buildings): the shorter opposite edge pair becomes vertical
+## gable-end wall triangles up to the ridge apex, the longer pair becomes
+## sloped roof quads down to their eave. `poly` must already be wound per
+## the Phase A convention (CW seen from +y, matching the walls beneath).
+func _add_gable_roof(st: SurfaceTool, poly: PackedVector2Array, top: float,
+		wall_col: Color, roof_col: Color) -> void:
+	var e0 := poly[0].distance_to(poly[1])
+	var e1 := poly[1].distance_to(poly[2])
+	var e2 := poly[2].distance_to(poly[3])
+	var e3 := poly[3].distance_to(poly[0])
+	# Rotate indices so edges (0,1) and (2,3) are the short "gable end" pair
+	# and (1,2)/(3,0) are the long eaves the ridge runs parallel to.
+	if e0 + e2 > e1 + e3:
+		poly = PackedVector2Array([poly[1], poly[2], poly[3], poly[0]])
+		e0 = e1
+		e2 = e3
+
+	var ridge_rise := clampf(0.45 * (e0 + e2) * 0.5, 1.5, 3.0)
+	var ridge_h := top + ridge_rise
+	var r0 := (poly[0] + poly[1]) * 0.5  # ridge apex above the (0,1) gable end
+	var r1 := (poly[2] + poly[3]) * 0.5  # ridge apex above the (2,3) gable end
+	var rv0 := Vector3(r0.x, ridge_h, r0.y)
+	var rv1 := Vector3(r1.x, ridge_h, r1.y)
+
+	# Gable-end triangles: vertical planes directly above wall edges (0,1)
+	# and (2,3) (ridge apex sits on that same edge's midline), so they share
+	# the walls' outward direction — normal derived the same way as a wall
+	# quad's two triangles (see _build_buildings), just one triangle instead
+	# of two since the top edge has collapsed to a point.
+	st.set_color(wall_col)
+	for edge in [[poly[0], poly[1], rv0], [poly[2], poly[3], rv1]]:
+		var a: Vector2 = edge[0]
+		var c: Vector2 = edge[1]
+		var v0 := Vector3(a.x, top, a.y)
+		var v1 := Vector3(c.x, top, c.y)
+		var v2: Vector3 = edge[2]
+		st.set_normal((v2 - v0).cross(v1 - v0).normalized())
+		st.add_vertex(v0)
+		st.add_vertex(v1)
+		st.add_vertex(v2)
+
+	# Sloped roof quads: from each long eave edge (1,2) and (3,0) up to the
+	# ridge line, split into two triangles like a wall quad, ridge corners
+	# paired with the eave corner on the matching gable end.
+	st.set_color(roof_col)
+	for eave in [[poly[3], poly[0], rv0, rv1], [poly[1], poly[2], rv1, rv0]]:
+		var a: Vector2 = eave[0]
+		var c: Vector2 = eave[1]
+		var v0 := Vector3(a.x, top, a.y)
+		var v1 := Vector3(c.x, top, c.y)
+		var v2: Vector3 = eave[2]
+		var v3: Vector3 = eave[3]
+		st.set_normal((v2 - v0).cross(v1 - v0).normalized())
+		st.add_vertex(v0)
+		st.add_vertex(v1)
+		st.add_vertex(v2)
+		st.set_normal((v3 - v0).cross(v2 - v0).normalized())
+		st.add_vertex(v0)
+		st.add_vertex(v2)
+		st.add_vertex(v3)

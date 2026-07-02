@@ -20,6 +20,8 @@ Outputs (assets/maps/sebexen/):
   - heightmap.bin  float32 LE grid, row 0 = north edge, heights in meters
                    relative to the spawn point (spawn ground = 0)
   - classmap.bin   uint8 grid, same dims: 0 field, 1 forest, 2 water, 3 road
+  - albedo.png     1 m/px ground color texture (field/forest/water/road,
+                   with altitude+slope field tint), for OsmTerrain's mesh UVs
   - map.json       grid metadata + building footprints in local meters
 
 Local frame (matches Godot): origin = spawn point, x = east, z = south.
@@ -31,7 +33,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFilter
 from pyproj import Transformer
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -64,6 +66,19 @@ ROAD_WIDTHS = {  # meters; anything else gets the default
 ROAD_WIDTH_DEFAULT = 4.0
 WATERWAY_WIDTH = 2.0
 BUILDING_HEIGHT_DEFAULT = 6.0  # no building:levels in this extract
+
+TEX_CELL = 1.0  # meters per albedo.png pixel
+
+# Ground palette (0..1 RGB), matched to OsmTerrain's former per-vertex
+# _class_color — now baked once here instead of computed at runtime.
+PALETTE = {
+    CLASS_FOREST: (0.13, 0.24, 0.10),
+    CLASS_WATER: (0.15, 0.30, 0.50),
+    CLASS_ROAD: (0.32, 0.31, 0.30),
+}
+FIELD_LOW = np.array([0.30, 0.45, 0.18])   # low ground
+FIELD_HIGH = np.array([0.52, 0.48, 0.26])  # dries out with altitude
+ROCK = np.array([0.55, 0.52, 0.48])        # exposed on steep slopes
 
 
 def load_mosaic() -> np.ndarray:
@@ -137,22 +152,22 @@ class Osm:
         return rings
 
 
-def to_px(pts: list[tuple[float, float]]) -> list[tuple[float, float]]:
+def to_px(pts: list[tuple[float, float]], cell: float) -> list[tuple[float, float]]:
     x0, z0 = E_MIN - SPAWN_E, -(N_MAX - SPAWN_N)
-    return [((x - x0) / CELL, (z - z0) / CELL) for x, z in pts]
+    return [((x - x0) / cell, (z - z0) / cell) for x, z in pts]
 
 
-def build_classmap(osm: Osm, shape: tuple[int, int]) -> np.ndarray:
+def build_classmap(osm: Osm, shape: tuple[int, int], cell: float) -> np.ndarray:
     img = Image.new("L", (shape[1], shape[0]), CLASS_FIELD)
     draw = ImageDraw.Draw(img)
 
     def polygon(pts, cls):
         if len(pts) >= 3:
-            draw.polygon(to_px(pts), fill=cls)
+            draw.polygon(to_px(pts, cell), fill=cls)
 
     def line(pts, cls, width_m):
         if len(pts) >= 2:
-            draw.line(to_px(pts), fill=cls, width=max(1, round(width_m / CELL)))
+            draw.line(to_px(pts, cell), fill=cls, width=max(1, round(width_m / cell)))
 
     for wid, tags in osm.way_tags.items():
         if tags.get("landuse") == "forest" or tags.get("natural") == "wood":
@@ -173,6 +188,32 @@ def build_classmap(osm: Osm, shape: tuple[int, int]) -> np.ndarray:
             line(osm.pts(wid), CLASS_ROAD,
                  ROAD_WIDTHS.get(tags["highway"], ROAD_WIDTH_DEFAULT))
     return np.array(img, np.uint8)
+
+
+def build_albedo(grid: np.ndarray, classmap_1m: np.ndarray) -> Image.Image:
+    """1 m/px ground color texture: field/forest/water/road palette, with
+    field altitude+slope tint upsampled from the (coarser) DEM grid."""
+    h1, w1 = classmap_1m.shape
+    h_span = max(float(grid.max() - grid.min()), 1.0)
+    norm_h = (grid - grid.min()) / h_span
+    gy, gx = np.gradient(grid, CELL)
+    slope = np.clip(np.arctan(np.sqrt(gx ** 2 + gy ** 2)) / (np.pi / 4), 0.0, 1.0)
+
+    def upsample(arr: np.ndarray) -> np.ndarray:
+        img = Image.fromarray(arr.astype(np.float32), mode="F")
+        return np.array(img.resize((w1, h1), Image.BILINEAR))
+
+    t_h = upsample(norm_h)[..., None]
+    rock_t = np.clip((upsample(slope) - 0.3) / 0.4, 0.0, 1.0)[..., None]
+    rgb = FIELD_LOW * (1 - t_h) + FIELD_HIGH * t_h
+    rgb = rgb * (1 - rock_t) + ROCK * rock_t
+    for cls, color in PALETTE.items():
+        rgb[classmap_1m == cls] = color
+    img = Image.fromarray((np.clip(rgb, 0.0, 1.0) * 255).astype(np.uint8), mode="RGB")
+    # Class boundaries (field/forest/water) come out of the OSM rasterization
+    # as hard 1px edges; a light blur reads as a natural transition instead.
+    # Road stripes are already thin so this doesn't meaningfully soften them.
+    return img.filter(ImageFilter.GaussianBlur(radius=1.5))
 
 
 def collect_buildings(osm: Osm) -> list[dict]:
@@ -197,11 +238,16 @@ def main() -> None:
     mos = load_mosaic()
     grid, datum = build_height_grid(mos)
     osm = Osm(SRC / "sebexen.osm")
-    classmap = build_classmap(osm, grid.shape)
+    classmap = build_classmap(osm, grid.shape, CELL)
+    w1 = int((E_MAX - E_MIN) / TEX_CELL) + 1
+    h1 = int((N_MAX - N_MIN) / TEX_CELL) + 1
+    classmap_1m = build_classmap(osm, (h1, w1), TEX_CELL)
+    albedo = build_albedo(grid, classmap_1m)
     buildings = collect_buildings(osm)
 
     (OUT / "heightmap.bin").write_bytes(grid.astype("<f4").tobytes())
     (OUT / "classmap.bin").write_bytes(classmap.tobytes())
+    albedo.save(OUT / "albedo.png")
     meta = {
         "name": "sebexen",
         "cell_size": CELL,
@@ -238,7 +284,8 @@ def main() -> None:
     assert len(buildings) > 600, len(buildings)
     print(f"grid {w}x{h} cells @ {CELL} m, height {grid.min():.1f}..{grid.max():.1f} m rel. spawn (datum {datum:.1f} m)")
     print(f"class cells: {counts}  buildings: {len(buildings)}")
-    print(f"wrote {OUT}/heightmap.bin ({grid.nbytes >> 20} MB), classmap.bin, map.json")
+    print(f"wrote {OUT}/heightmap.bin ({grid.nbytes >> 20} MB), classmap.bin, "
+          f"albedo.png ({w1}x{h1}), map.json")
 
 
 if __name__ == "__main__":
