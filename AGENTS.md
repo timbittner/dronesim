@@ -190,6 +190,12 @@ speed and an `m/s` readout, dimming on crash like the rest of the telemetry.
 - **Physics:** All drone physics in `_physics_process`, not `_process`
 - **Input:** Always use `Input.get_action_strength` for analog sticks
 - **Commits:** Conventional Commits (`feat:`, `fix:`, `refactor:`, `docs:`, `chore:`)
+- **Git workflow:** work on a feature branch, not directly on `main` — every
+  push to `main` triggers CI + the Pages docs deploy (`.github/workflows/ci.yml`),
+  so pushes there should be deliberate, not incidental to normal iteration.
+  **Always ask before pushing to `main` or opening a PR into it** — this is
+  the last step of a task, never a background/automatic one, regardless of
+  how many local commits were made getting there.
 
 ## Coordinate System (CANONICAL — read this before touching rotors, pitch, or roll)
 
