@@ -132,6 +132,7 @@ var _rotor_positions: Array[Vector3] = [
 
 
 func _ready() -> void:
+	add_to_group("drone")  # resolved by mission targets / tracker (P5)
 	_spawn_transform = global_transform
 	gravity_scale = 1.0
 	angular_damp = 0.0

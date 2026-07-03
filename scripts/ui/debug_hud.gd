@@ -53,6 +53,13 @@ var _radar_pulse: float = 0.0
 var _airspace: Node = null
 var _airspace_searched: bool = false
 
+# Mission success banner (P5 Phase 6): shown once the MissionTracker (group
+# "mission_tracker", lazily resolved) reports all targets cleared. No tracker in
+# the scene = no banner.
+var _mission_label: Label
+var _tracker: Node = null
+var _tracker_searched: bool = false
+
 var _gizmo_panel: ColorRect
 var _gizmo_canvas: Control
 var _coord_label: Label
@@ -112,6 +119,7 @@ func _process(delta: float) -> void:
 
 	_update_crash_overlay(delta)
 	_update_radar_banner(delta)
+	_update_mission_banner()
 
 	var fpv: bool = _drone.is_fpv_enabled()
 	var intensity: float = clampf(
@@ -204,6 +212,15 @@ func _update_radar_banner(delta: float) -> void:
 		_radar_label.modulate.a = 0.6 + 0.4 * sin(_radar_pulse * 6.0)
 	else:
 		_radar_pulse = 0.0
+
+
+func _update_mission_banner() -> void:
+	if not _tracker_searched:
+		_tracker_searched = true
+		_tracker = get_tree().get_first_node_in_group("mission_tracker")
+	if _tracker == null:
+		return
+	_mission_label.visible = _tracker.completed
 
 
 func _gather_telemetry() -> Dictionary:
@@ -404,6 +421,21 @@ func _build_ui() -> void:
 	_compass_canvas.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_compass_canvas.draw.connect(_on_compass_draw)
 	_compass_panel.add_child(_compass_canvas)
+
+	# Mission success banner, centered just above the compass strip.
+	_mission_label = Label.new()
+	_mission_label.text = "MISSION SUCCESS"
+	_mission_label.add_theme_font_size_override("font_size", 26)
+	_mission_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.4))
+	_mission_label.add_theme_color_override("font_outline_color", Color(0, 0, 0))
+	_mission_label.add_theme_constant_override("outline_size", 5)
+	_mission_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_mission_label.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	_mission_label.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	_mission_label.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	_mission_label.offset_top = -90.0
+	_mission_label.visible = false
+	add_child(_mission_label)
 
 	_signal_lost_label = Label.new()
 	_signal_lost_label.text = "SIGNAL LOST"
