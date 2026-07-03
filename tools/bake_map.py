@@ -1,0 +1,432 @@
+#!/usr/bin/env python3
+"""Bake the Sebexen map: DGM1 elevation tiles + OSM extract -> Godot assets.
+
+One-time offline step (outputs are checked into the repo):
+
+    python3 -m venv .venv && .venv/bin/pip install pyproj pillow numpy
+    .venv/bin/python tools/bake_map.py
+
+Inputs (tools/map_sources/sebexen/, gitignored):
+  - dgm1_32_<E>_<N>_1_ni_2016.tif  LGLN DGM1 1m elevation, 1x1 km tiles,
+    EPSG:25832. Free download, no API key: the tile index at
+    https://services-eu1.arcgis.com/4v3xxN52w88W065F/arcgis/rest/services/
+    lgln_opengeodata_dgm1/FeatureServer/0/query (portal:
+    https://opengeodata.lgln.niedersachsen.de/) lists per-tile URLs like
+    https://dgm1.s3.eu-de.cloud-object-storage.appdomain.cloud/L1606/
+    Vollkacheln/dgm1_32_569_5740_1_ni_2016.tif
+  - sebexen.osm  OSM XML extract (openstreetmap.org export)
+
+Outputs (assets/maps/sebexen/):
+  - heightmap.bin  float32 LE grid, row 0 = north edge, heights in meters
+                   relative to the spawn point (spawn ground = 0)
+  - classmap.bin   uint8 grid, same dims: 0 field, 1 forest, 2 water, 3 road
+  - albedo.png     1 m/px ground color texture (field/forest/water/road,
+                   with altitude+slope field tint), for OsmTerrain's mesh UVs
+  - map.json       grid metadata + building footprints + roadside/garden
+                   deciduous tree positions, in local meters
+
+Local frame (matches Godot): origin = spawn point, x = east, z = south.
+"""
+
+import json
+import math
+import random
+import struct
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+import numpy as np
+from PIL import Image, ImageDraw, ImageFilter
+from pyproj import Transformer
+
+ROOT = Path(__file__).resolve().parent.parent
+SRC = ROOT / "tools/map_sources/sebexen"
+OUT = ROOT / "assets/maps/sebexen"
+
+# Map rectangle in EPSG:25832, snapped to whole meters inside the OSM extract
+# bounds (E 569349..572753, N 5740080..5742495) and the 12 downloaded tiles.
+E_MIN, E_MAX = 569350, 572750
+N_MIN, N_MAX = 5740090, 5742490
+TILES_E, TILES_N = range(569, 573), range(5740, 5743)
+MOSAIC_E0, MOSAIC_N1 = 569000, 5743000  # west edge / north edge of tile mosaic
+
+# Flat open field between Sebexen and the forest to the north. Originally
+# picked from the DEM; moved 2026-07 to the user's preferred in-game spot
+# (was local [-269.521, -400.334] under the old origin) — the flatten pass
+# forces a pad here regardless of underlying relief, so exact flatness at
+# pick time no longer matters.
+SPAWN_E, SPAWN_N = 570730, 5742050
+
+CELL = 2.0  # meters per grid cell (DGM1 native 1 m, downsampled 2:1)
+
+CLASS_FIELD, CLASS_FOREST, CLASS_WATER, CLASS_ROAD = 0, 1, 2, 3
+
+ROAD_WIDTHS = {  # meters; anything else gets the default
+    "primary": 7.0, "secondary": 7.0, "tertiary": 6.0,
+    "residential": 5.0, "unclassified": 5.0, "service": 4.0,
+    "track": 3.0, "path": 2.0, "footway": 2.0, "cycleway": 2.0,
+}
+ROAD_WIDTH_DEFAULT = 4.0
+WATERWAY_WIDTH = 2.0
+BUILDING_HEIGHT_DEFAULT = 6.0  # no building:levels in this extract
+
+TEX_CELL = 1.0  # meters per albedo.png pixel
+
+ROADSIDE_SPACING = (10.0, 30.0)   # meters, jittered
+ROADSIDE_SETBACK = (1.5, 3.0)     # meters, beyond the road half-width
+GARDEN_TREE_DENSITY = (1000.0, 2000.0)  # m^2 per tree, jittered per polygon
+GARDEN_BUILDING_CLEARANCE = 3.0   # meters
+TREE_SEED = 1337
+
+# Ground palette (0..1 RGB), matched to OsmTerrain's former per-vertex
+# _class_color — now baked once here instead of computed at runtime.
+PALETTE = {
+    CLASS_FOREST: (0.13, 0.24, 0.10),
+    CLASS_WATER: (0.15, 0.30, 0.50),
+    CLASS_ROAD: (0.32, 0.31, 0.30),
+}
+FIELD_LOW = np.array([0.30, 0.45, 0.18])   # low ground
+FIELD_HIGH = np.array([0.52, 0.48, 0.26])  # dries out with altitude
+ROCK = np.array([0.55, 0.52, 0.48])        # exposed on steep slopes
+
+
+def load_mosaic() -> np.ndarray:
+    mos = np.zeros((3000, 4000), np.float32)
+    for e in TILES_E:
+        for n in TILES_N:
+            tile = np.array(Image.open(SRC / f"dgm1_32_{e}_{n}_1_ni_2016.tif"))
+            assert tile.shape == (1000, 1000), tile.shape
+            r0 = MOSAIC_N1 - (n + 1) * 1000
+            c0 = e * 1000 - MOSAIC_E0
+            mos[r0:r0 + 1000, c0:c0 + 1000] = tile
+    return mos
+
+
+def build_height_grid(mos: np.ndarray) -> tuple[np.ndarray, float]:
+    r0, r1 = MOSAIC_N1 - N_MAX, MOSAIC_N1 - N_MIN
+    c0, c1 = E_MIN - MOSAIC_E0, E_MAX - MOSAIC_E0
+    grid = mos[r0:r1 + 1:int(CELL), c0:c1 + 1:int(CELL)].copy()
+    datum = float(mos[MOSAIC_N1 - SPAWN_N, SPAWN_E - MOSAIC_E0])
+    return grid - datum, datum
+
+
+class Osm:
+    """The OSM extract, with node coords already in the local frame."""
+
+    def __init__(self, path: Path):
+        to_utm = Transformer.from_crs("EPSG:4326", "EPSG:25832", always_xy=True)
+        root = ET.parse(path).getroot()
+        self.nodes: dict[str, tuple[float, float]] = {}
+        for n in root.iter("node"):
+            e, north = to_utm.transform(float(n.get("lon")), float(n.get("lat")))
+            self.nodes[n.get("id")] = (e - SPAWN_E, -(north - SPAWN_N))
+        self.way_refs: dict[str, list[str]] = {}
+        self.way_tags: dict[str, dict[str, str]] = {}
+        for w in root.iter("way"):
+            wid = w.get("id")
+            self.way_refs[wid] = [nd.get("ref") for nd in w.findall("nd")]
+            self.way_tags[wid] = {t.get("k"): t.get("v") for t in w.findall("tag")}
+        self.relations = list(root.iter("relation"))
+
+    def pts(self, wid: str) -> list[tuple[float, float]]:
+        return [self.nodes[r] for r in self.way_refs[wid] if r in self.nodes]
+
+    def outer_rings(self, rel) -> list[list[tuple[float, float]]]:
+        """Stitch a multipolygon relation's outer member ways into rings."""
+        segs = [list(self.way_refs[m.get("ref")])
+                for m in rel.findall("member")
+                if m.get("type") == "way" and m.get("role") == "outer"
+                and m.get("ref") in self.way_refs]
+        rings = []
+        while segs:
+            ring = segs.pop(0)
+            grew = True
+            while grew and ring[0] != ring[-1]:
+                grew = False
+                for i, s in enumerate(segs):
+                    if s[0] == ring[-1]:
+                        ring += s[1:]
+                    elif s[-1] == ring[-1]:
+                        ring += list(reversed(s))[1:]
+                    elif s[-1] == ring[0]:
+                        ring = s + ring[1:]
+                    elif s[0] == ring[0]:
+                        ring = list(reversed(s)) + ring[1:]
+                    else:
+                        continue
+                    segs.pop(i)
+                    grew = True
+                    break
+            rings.append([self.nodes[r] for r in ring if r in self.nodes])
+        return rings
+
+
+def to_px(pts: list[tuple[float, float]], cell: float) -> list[tuple[float, float]]:
+    x0, z0 = E_MIN - SPAWN_E, -(N_MAX - SPAWN_N)
+    return [((x - x0) / cell, (z - z0) / cell) for x, z in pts]
+
+
+def build_classmap(osm: Osm, shape: tuple[int, int], cell: float) -> np.ndarray:
+    img = Image.new("L", (shape[1], shape[0]), CLASS_FIELD)
+    draw = ImageDraw.Draw(img)
+
+    def polygon(pts, cls):
+        if len(pts) >= 3:
+            draw.polygon(to_px(pts, cell), fill=cls)
+
+    def line(pts, cls, width_m):
+        if len(pts) >= 2:
+            draw.line(to_px(pts, cell), fill=cls, width=max(1, round(width_m / cell)))
+
+    for wid, tags in osm.way_tags.items():
+        if tags.get("landuse") == "forest" or tags.get("natural") == "wood":
+            polygon(osm.pts(wid), CLASS_FOREST)
+    for rel in osm.relations:
+        tags = {t.get("k"): t.get("v") for t in rel.findall("tag")}
+        if tags.get("type") == "multipolygon" and (
+                tags.get("landuse") == "forest" or tags.get("natural") == "wood"):
+            for ring in osm.outer_rings(rel):
+                polygon(ring, CLASS_FOREST)
+    for wid, tags in osm.way_tags.items():
+        if tags.get("natural") == "water" or tags.get("landuse") == "reservoir":
+            polygon(osm.pts(wid), CLASS_WATER)
+        elif "waterway" in tags:
+            line(osm.pts(wid), CLASS_WATER, WATERWAY_WIDTH)
+    for wid, tags in osm.way_tags.items():
+        if "highway" in tags:
+            line(osm.pts(wid), CLASS_ROAD,
+                 ROAD_WIDTHS.get(tags["highway"], ROAD_WIDTH_DEFAULT))
+    return np.array(img, np.uint8)
+
+
+def build_albedo(grid: np.ndarray, classmap_1m: np.ndarray) -> Image.Image:
+    """1 m/px ground color texture: field/forest/water/road palette, with
+    field altitude+slope tint upsampled from the (coarser) DEM grid."""
+    h1, w1 = classmap_1m.shape
+    h_span = max(float(grid.max() - grid.min()), 1.0)
+    norm_h = (grid - grid.min()) / h_span
+    gy, gx = np.gradient(grid, CELL)
+    slope = np.clip(np.arctan(np.sqrt(gx ** 2 + gy ** 2)) / (np.pi / 4), 0.0, 1.0)
+
+    def upsample(arr: np.ndarray) -> np.ndarray:
+        img = Image.fromarray(arr.astype(np.float32), mode="F")
+        return np.array(img.resize((w1, h1), Image.BILINEAR))
+
+    t_h = upsample(norm_h)[..., None]
+    rock_t = np.clip((upsample(slope) - 0.3) / 0.4, 0.0, 1.0)[..., None]
+    rgb = FIELD_LOW * (1 - t_h) + FIELD_HIGH * t_h
+    rgb = rgb * (1 - rock_t) + ROCK * rock_t
+    for cls, color in PALETTE.items():
+        rgb[classmap_1m == cls] = color
+    img = Image.fromarray((np.clip(rgb, 0.0, 1.0) * 255).astype(np.uint8), mode="RGB")
+    # Class boundaries (field/forest/water) come out of the OSM rasterization
+    # as hard 1px edges; a light blur reads as a natural transition instead.
+    # Road stripes are already thin so this doesn't meaningfully soften them.
+    return img.filter(ImageFilter.GaussianBlur(radius=1.5))
+
+
+def collect_buildings(osm: Osm) -> list[dict]:
+    out = []
+    for wid, tags in osm.way_tags.items():
+        if "building" not in tags:
+            continue
+        pts = osm.pts(wid)
+        if len(pts) >= 4 and pts[0] == pts[-1]:
+            pts = pts[:-1]
+        if len(pts) < 3:
+            continue
+        levels = tags.get("building:levels")
+        height = float(levels) * 3.0 if levels else BUILDING_HEIGHT_DEFAULT
+        out.append({"pts": [[round(x, 2), round(z, 2)] for x, z in pts],
+                    "h": height})
+    return out
+
+
+def point_in_poly(pt: tuple[float, float], poly: list[tuple[float, float]]) -> bool:
+    x, y = pt
+    inside = False
+    n = len(poly)
+    for i in range(n):
+        x1, y1 = poly[i]
+        x2, y2 = poly[(i + 1) % n]
+        if (y1 > y) != (y2 > y):
+            x_cross = (x2 - x1) * (y - y1) / (y2 - y1) + x1
+            if x < x_cross:
+                inside = not inside
+    return inside
+
+
+def dist_point_to_poly(pt: tuple[float, float], poly: list[tuple[float, float]]) -> float:
+    px, py = pt
+    best = math.inf
+    n = len(poly)
+    for i in range(n):
+        ax, ay = poly[i]
+        bx, by = poly[(i + 1) % n]
+        dx, dy = bx - ax, by - ay
+        if dx == 0.0 and dy == 0.0:
+            d = math.hypot(px - ax, py - ay)
+        else:
+            t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)))
+            d = math.hypot(px - (ax + t * dx), py - (ay + t * dy))
+        best = min(best, d)
+    return best
+
+
+def classmap_class_at(classmap: np.ndarray, cell: float, x: float, z: float) -> int:
+    x0, z0 = E_MIN - SPAWN_E, -(N_MAX - SPAWN_N)
+    col = round((x - x0) / cell)
+    row = round((z - z0) / cell)
+    h, w = classmap.shape
+    if 0 <= row < h and 0 <= col < w:
+        return int(classmap[row, col])
+    return -1  # off the map — treated as "reject", never CLASS_FIELD
+
+
+def collect_residential_polys(osm: Osm) -> list[list[tuple[float, float]]]:
+    polys = []
+    for wid, tags in osm.way_tags.items():
+        if tags.get("landuse") != "residential":
+            continue
+        pts = osm.pts(wid)
+        if len(pts) >= 4 and pts[0] == pts[-1]:
+            pts = pts[:-1]
+        if len(pts) >= 3:
+            polys.append(pts)
+    return polys
+
+
+def collect_roadside_trees(osm: Osm, residential: list[list[tuple[float, float]]],
+                            classmap: np.ndarray, rng: random.Random) -> list[list[float]]:
+    """Trees every ~10-30m along road polylines outside village limits, set
+    back beyond the road shoulder — the offline equivalent of a rural avenue
+    of lindens/oaks."""
+    trees = []
+    for wid, tags in osm.way_tags.items():
+        if "highway" not in tags:
+            continue
+        pts = osm.pts(wid)
+        if len(pts) < 2:
+            continue
+        half_w = ROAD_WIDTHS.get(tags["highway"], ROAD_WIDTH_DEFAULT) / 2.0
+        dist_to_next = rng.uniform(*ROADSIDE_SPACING)
+        for i in range(len(pts) - 1):
+            x1, z1 = pts[i]
+            x2, z2 = pts[i + 1]
+            seg_len = math.hypot(x2 - x1, z2 - z1)
+            if seg_len < 1e-6:
+                continue
+            dx, dz = (x2 - x1) / seg_len, (z2 - z1) / seg_len
+            perp_x, perp_z = -dz, dx  # 90 deg, either side chosen per-tree
+            traveled = 0.0
+            while traveled + dist_to_next < seg_len:
+                traveled += dist_to_next
+                tx, tz = x1 + dx * traveled, z1 + dz * traveled
+                side = rng.choice((-1.0, 1.0))
+                off = half_w + rng.uniform(*ROADSIDE_SETBACK)
+                cx, cz = tx + perp_x * off * side, tz + perp_z * off * side
+                if classmap_class_at(classmap, CELL, cx, cz) == CLASS_FIELD and \
+                        not any(point_in_poly((cx, cz), p) for p in residential):
+                    trees.append([round(cx, 2), round(cz, 2), round(rng.uniform(0.8, 1.3), 2)])
+                dist_to_next = rng.uniform(*ROADSIDE_SPACING)
+            dist_to_next -= seg_len - traveled
+    return trees
+
+
+def collect_garden_trees(residential: list[list[tuple[float, float]]], buildings: list[dict],
+                          classmap: np.ndarray, rng: random.Random) -> list[list[float]]:
+    """Sparse random trees inside residential landuse polygons, kept clear of
+    buildings and roads."""
+    trees = []
+    for poly in residential:
+        xs = [p[0] for p in poly]
+        zs = [p[1] for p in poly]
+        area = 0.0
+        n = len(poly)
+        for i in range(n):
+            x1, y1 = poly[i]
+            x2, y2 = poly[(i + 1) % n]
+            area += x1 * y2 - x2 * y1
+        area = abs(area) / 2.0
+        target = int(area / rng.uniform(*GARDEN_TREE_DENSITY))
+        placed = 0
+        attempts = 0
+        while placed < target and attempts < target * 30 + 30:
+            attempts += 1
+            cx = rng.uniform(min(xs), max(xs))
+            cz = rng.uniform(min(zs), max(zs))
+            if not point_in_poly((cx, cz), poly):
+                continue
+            if classmap_class_at(classmap, CELL, cx, cz) != CLASS_FIELD:
+                continue
+            if any(dist_point_to_poly((cx, cz), b["pts"]) < GARDEN_BUILDING_CLEARANCE
+                    for b in buildings):
+                continue
+            trees.append([round(cx, 2), round(cz, 2), round(rng.uniform(0.7, 1.2), 2)])
+            placed += 1
+    return trees
+
+
+def main() -> None:
+    OUT.mkdir(parents=True, exist_ok=True)
+    mos = load_mosaic()
+    grid, datum = build_height_grid(mos)
+    osm = Osm(SRC / "sebexen.osm")
+    classmap = build_classmap(osm, grid.shape, CELL)
+    w1 = int((E_MAX - E_MIN) / TEX_CELL) + 1
+    h1 = int((N_MAX - N_MIN) / TEX_CELL) + 1
+    classmap_1m = build_classmap(osm, (h1, w1), TEX_CELL)
+    albedo = build_albedo(grid, classmap_1m)
+    buildings = collect_buildings(osm)
+    residential = collect_residential_polys(osm)
+    tree_rng = random.Random(TREE_SEED)
+    trees = collect_roadside_trees(osm, residential, classmap, tree_rng) \
+        + collect_garden_trees(residential, buildings, classmap, tree_rng)
+
+    (OUT / "heightmap.bin").write_bytes(grid.astype("<f4").tobytes())
+    (OUT / "classmap.bin").write_bytes(classmap.tobytes())
+    albedo.save(OUT / "albedo.png")
+    meta = {
+        "name": "sebexen",
+        "cell_size": CELL,
+        "grid_width": grid.shape[1],
+        "grid_height": grid.shape[0],
+        "origin_x": float(E_MIN - SPAWN_E),
+        "origin_z": float(-(N_MAX - SPAWN_N)),
+        "height_datum": round(datum, 2),
+        "utm": {"epsg": 25832, "e_min": E_MIN, "n_max": N_MAX,
+                "spawn_e": SPAWN_E, "spawn_n": SPAWN_N},
+        "classes": {"0": "field", "1": "forest", "2": "water", "3": "road"},
+        "buildings": buildings,
+        "trees": trees,
+        "attribution": [
+            "Elevation: DGM1 (c) LGLN Niedersachsen 2016, dl-de/by-2-0",
+            "Map data (c) OpenStreetMap contributors, ODbL",
+        ],
+    }
+    (OUT / "map.json").write_text(json.dumps(meta, separators=(",", ":")))
+
+    # Self-checks
+    h, w = grid.shape
+    assert (w, h) == ((E_MAX - E_MIN) // int(CELL) + 1,
+                      (N_MAX - N_MIN) // int(CELL) + 1), (w, h)
+    spawn_col = round((0 - meta["origin_x"]) / CELL)
+    spawn_row = round((0 - meta["origin_z"]) / CELL)
+    assert abs(grid[spawn_row, spawn_col]) < 0.01, "spawn ground must be ~0"
+    # Not required to be dead flat here: OsmTerrain flattens the pad at
+    # runtime (osm_terrain.gd::_flatten_spawn_pad) regardless of raw relief.
+    # This just guards against picking a spot on a cliff/building by mistake.
+    patch = grid[spawn_row - 5:spawn_row + 5, spawn_col - 5:spawn_col + 5]
+    assert patch.max() - patch.min() < 5.0, "spawn area too steep for the flatten pass"
+    counts = {c: int((classmap == c).sum()) for c in range(4)}
+    assert all(counts[c] > 0 for c in range(4)), counts
+    assert len(buildings) > 600, len(buildings)
+    assert len(trees) > 0, "roadside/garden tree placement found nothing"
+    print(f"grid {w}x{h} cells @ {CELL} m, height {grid.min():.1f}..{grid.max():.1f} m rel. spawn (datum {datum:.1f} m)")
+    print(f"class cells: {counts}  buildings: {len(buildings)}  roadside/garden trees: {len(trees)}")
+    print(f"wrote {OUT}/heightmap.bin ({grid.nbytes >> 20} MB), classmap.bin, "
+          f"albedo.png ({w1}x{h1}), map.json")
+
+
+if __name__ == "__main__":
+    main()

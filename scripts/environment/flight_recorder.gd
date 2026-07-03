@@ -4,7 +4,9 @@ extends Node
 ## Streams one JSONL line of drone telemetry per physics tick to
 ## user://telemetry/flight_<timestamp>_<n>.jsonl, for post-flight debugging and
 ## for agents inspecting a run without watching it live (the absolute path is
-## printed at startup so headless runs can find it from stdout).
+## printed at startup so headless runs can find it from stdout). Old flights
+## are wiped at startup — this is scratch space for the current session, not
+## an archive; a few minutes of physics-tick-rate JSONL adds up fast.
 ##
 ## Environment-side observer, same pattern as CrashEffects/WindField: reads
 ## drone state, never writes it — nothing here can leak into the flight
@@ -31,7 +33,22 @@ func _ready() -> void:
 		set_physics_process(false)
 		return
 	_drone.drone_reset.connect(_open_new_file)
+	_clear_old_telemetry()
 	_open_new_file()
+
+
+## Wipes prior runs' logs once at startup (not on drone_reset — resets should
+## keep accumulating this session's flights for post-session inspection).
+func _clear_old_telemetry() -> void:
+	var dir := DirAccess.open("user://telemetry")
+	if dir == null:
+		return
+	dir.list_dir_begin()
+	var f := dir.get_next()
+	while f != "":
+		if f.ends_with(".jsonl"):
+			dir.remove(f)
+		f = dir.get_next()
 
 
 ## One file per flight: called at startup and again on every drone reset.

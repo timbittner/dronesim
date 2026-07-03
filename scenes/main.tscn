@@ -2,12 +2,12 @@
 
 [ext_resource type="PackedScene" uid="uid://5jri1ism1wee" path="res://scenes/drone/drone.tscn" id="1_drone_scene"]
 [ext_resource type="Script" uid="uid://drcgnp0heelc5" path="res://scripts/camera/chase_camera.gd" id="2_chase_cam"]
-[ext_resource type="PackedScene" path="res://scenes/environment/terrain.tscn" id="3_terrain"]
+[ext_resource type="PackedScene" path="res://scenes/environment/osm_terrain.tscn" id="3_terrain"]
 [ext_resource type="Script" uid="uid://c6kocm2px6681" path="res://scripts/ui/debug_hud.gd" id="4_debug_hud"]
-[ext_resource type="Script" path="res://scripts/environment/crash_effects.gd" id="5_crash_fx"]
-[ext_resource type="Script" path="res://scripts/environment/wind_field.gd" id="6_wind_field"]
-[ext_resource type="Script" path="res://scripts/environment/wind_particles.gd" id="7_wind_particles"]
-[ext_resource type="Script" path="res://scripts/environment/flight_recorder.gd" id="8_flight_recorder"]
+[ext_resource type="Script" uid="uid://bnnu5mhsr58oj" path="res://scripts/environment/crash_effects.gd" id="5_crash_fx"]
+[ext_resource type="Script" uid="uid://fklrj1ur1tw6" path="res://scripts/environment/wind_field.gd" id="6_wind_field"]
+[ext_resource type="Script" uid="uid://chrjy7nmorvjc" path="res://scripts/environment/wind_particles.gd" id="7_wind_particles"]
+[ext_resource type="Script" uid="uid://bw23aurgniyy3" path="res://scripts/environment/flight_recorder.gd" id="8_flight_recorder"]
 
 [sub_resource type="BoxMesh" id="BoxMesh_pad"]
 size = Vector3(2, 0.1, 2)
@@ -18,7 +18,6 @@ size = Vector3(2, 0.1, 2)
 [sub_resource type="ProceduralSkyMaterial" id="SkyMat_main"]
 sky_top_color = Color(0.25, 0.4, 0.6, 1)
 sky_horizon_color = Color(0.6, 0.65, 0.75, 1)
-sky_curve = 0.15
 ground_bottom_color = Color(0.15, 0.12, 0.1, 1)
 ground_horizon_color = Color(0.35, 0.35, 0.35, 1)
 
@@ -33,8 +32,8 @@ ambient_light_color = Color(0.4, 0.45, 0.55, 1)
 ambient_light_energy = 0.5
 fog_enabled = true
 fog_light_color = Color(0.6, 0.55, 0.5, 1)
-fog_density = 0.008
-fog_sky_affect = 0.3
+fog_density = 0.0005
+fog_sky_affect = 0.193
 
 [node name="Main" type="Node3D" unique_id=1501016617]
 
@@ -50,7 +49,7 @@ mesh = SubResource("BoxMesh_pad")
 shape = SubResource("BoxShape_spawn_pad")
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=1384618151]
-transform = Transform3D(0.85543597, 4.7922134e-05, 0.51790863, 0.13406833, 0.9658931, -0.22153166, -0.50025487, 0.2589413, 0.8262533, 0, 10, 0)
+transform = Transform3D(0.071222566, -0.27194327, 0.9596741, 0.34833154, 0.90832496, 0.23154083, -0.9346618, 0.31779385, 0.15941966, 0, 0, 0)
 light_color = Color(1, 0.92, 0.78, 1)
 light_energy = 1.4
 shadow_enabled = true
@@ -64,14 +63,14 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0)
 [node name="CrashEffects" type="Node3D" parent="." unique_id=1077355102]
 script = ExtResource("5_crash_fx")
 
-[node name="WindField" type="Node3D" parent="."]
+[node name="WindField" type="Node3D" parent="." unique_id=1048205618]
 script = ExtResource("6_wind_field")
 
-[node name="FlightRecorder" type="Node" parent="."]
-script = ExtResource("8_flight_recorder")
-
-[node name="WindParticles" type="MultiMeshInstance3D" parent="WindField"]
+[node name="WindParticles" type="MultiMeshInstance3D" parent="WindField" unique_id=211529622]
 script = ExtResource("7_wind_particles")
+
+[node name="FlightRecorder" type="Node" parent="." unique_id=245610671]
+script = ExtResource("8_flight_recorder")
 
 [node name="ChaseCamera" type="Camera3D" parent="." unique_id=171786846]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2, -4)

@@ -7,6 +7,10 @@
 /docs/classes/
 /docs/_build/
 
+# Map bake tooling (see tools/bake_map.py)
+/.venv/
+/tools/map_sources/
+
 # macOS
 .DS_Store
 
