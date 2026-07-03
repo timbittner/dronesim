@@ -274,10 +274,13 @@ func _build_forest() -> void:
 	var trunk_mat := StandardMaterial3D.new()
 	trunk_mat.albedo_color = Color(0.35, 0.22, 0.12)
 	trunk_mat.roughness = 0.95
+	# Radius at the default 1.0 scale factor (per-tree scale varies 0.7-1.4,
+	# see _scatter_pine_transforms/_load_deciduous_transforms) averages ~1m
+	# diameter, ranging ~0.7-1.4m — at least drone-width, largest well above.
 	var trunk := CylinderMesh.new()
-	trunk.top_radius = 0.15
-	trunk.bottom_radius = 0.25
-	trunk.height = 3.0
+	trunk.top_radius = 0.3
+	trunk.bottom_radius = 0.5
+	trunk.height = 6.0
 	trunk.radial_segments = 5
 	trunk.material = trunk_mat
 
@@ -343,12 +346,12 @@ func _build_forest() -> void:
 		var anchor_z := (key.y + 0.5) * forest_chunk_size
 		var anchor := Vector3(anchor_x, get_height(anchor_x, anchor_z), anchor_z)
 
-		_add_tree_multimesh("PineTrunks" + tag, trunk, 1.5, pine_c, anchor, 0.0, near_end, 0.0, margin)
-		_add_tree_multimesh("PineCanopies" + tag, pine_canopy, 6.0, pine_c, anchor, 0.0, near_end, 0.0, margin)
-		_add_tree_multimesh("DeciduousTrunks" + tag, trunk, 1.5, deciduous_c, anchor, 0.0, near_end, 0.0, margin)
-		_add_tree_multimesh("DeciduousCanopies" + tag, deciduous_canopy, 4.2, deciduous_c, anchor,
+		_add_tree_multimesh("PineTrunks" + tag, trunk, 3.0, pine_c, anchor, 0.0, near_end, 0.0, margin)
+		_add_tree_multimesh("PineCanopies" + tag, pine_canopy, 9.0, pine_c, anchor, 0.0, near_end, 0.0, margin)
+		_add_tree_multimesh("DeciduousTrunks" + tag, trunk, 3.0, deciduous_c, anchor, 0.0, near_end, 0.0, margin)
+		_add_tree_multimesh("DeciduousCanopies" + tag, deciduous_canopy, 7.9, deciduous_c, anchor,
 			0.0, near_end, 0.0, margin)
-		_add_tree_multimesh("FarCanopies" + tag, far_cone, 4.5, pine_c + deciduous_c, anchor,
+		_add_tree_multimesh("FarCanopies" + tag, far_cone, 8.0, pine_c + deciduous_c, anchor,
 			near_end, 0.0, margin, 0.0)
 
 	if tree_collision and not Engine.is_editor_hint():
@@ -451,8 +454,11 @@ func _add_tree_multimesh(mmi_name: String, mesh: Mesh, y: float,
 ## wall).
 func _build_tree_colliders(transforms: Array[Transform3D]) -> void:
 	_tree_shape = CylinderShape3D.new()
-	_tree_shape.radius = 0.22
-	_tree_shape.height = 3.0
+	# Matches the trunk mesh (top_radius 0.3, bottom_radius 0.5, height 6.0)
+	# closely enough with one uniform radius — a taper isn't worth a second
+	# shape per trunk.
+	_tree_shape.radius = 0.4
+	_tree_shape.height = 6.0
 	var shape_rid := _tree_shape.get_rid()
 	var space := get_world_3d().space
 	var i := 0
@@ -465,7 +471,7 @@ func _build_tree_colliders(transforms: Array[Transform3D]) -> void:
 		PhysicsServer3D.body_set_collision_mask(body, 1)
 		for j in range(i, batch_end):
 			var t: Transform3D = transforms[j]
-			var y_off: float = 1.5 * t.basis.get_scale().y
+			var y_off: float = 3.0 * t.basis.get_scale().y
 			PhysicsServer3D.body_add_shape(body, shape_rid,
 				Transform3D(t.basis, t.origin + Vector3(0.0, y_off, 0.0)))
 		_tree_bodies.append(body)
