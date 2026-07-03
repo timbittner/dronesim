@@ -12,6 +12,7 @@
 [ext_resource type="Script" uid="uid://8vomxnnq4drp" path="res://scripts/mission/airspace_control.gd" id="10_airspace"]
 [ext_resource type="PackedScene" path="res://scenes/mission/mission_target.tscn" id="11_mission_target"]
 [ext_resource type="Script" uid="uid://da74w6dhtkv8i" path="res://scripts/mission/mission_tracker.gd" id="12_mission_tracker"]
+[ext_resource type="PackedScene" path="res://scenes/mission/jamming_node.tscn" id="13_trceg"]
 
 [sub_resource type="BoxMesh" id="BoxMesh_pad"]
 size = Vector3(2, 0.1, 2)
@@ -80,15 +81,15 @@ script = ExtResource("9_signal_field")
 script = ExtResource("10_airspace")
 
 [node name="TargetObserveVillage" parent="." unique_id=667527463 instance=ExtResource("11_mission_target")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -458.67947, -50.69613, 283.14053)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -458.67947, -51.697716, 283.14053)
 radius = 25.0
 height = 50.0
 
 [node name="TargetObserveCenter" parent="." unique_id=307638042 instance=ExtResource("11_mission_target")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -269.93, -45.973026, 548.768)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -269.93, -48.13119, 548.768)
 
 [node name="TargetCrashField" parent="." unique_id=1535772233 instance=ExtResource("11_mission_target")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -655.7908, -65.00107, 701.4366)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -655.7908, -63.957844, 701.4366)
 type = 1
 radius = 30.0
 
@@ -105,3 +106,6 @@ target_path = NodePath("../Drone")
 
 [node name="DebugHUD" type="CanvasLayer" parent="." unique_id=1958239024]
 script = ExtResource("4_debug_hud")
+
+[node name="JammingNode" parent="." unique_id=1390709013 instance=ExtResource("13_trceg")]
+transform = Transform3D(-0.30869466, 0, -0.9511612, 0, 1, 0, 0.9511612, 0, -0.30869466, -113.956894, -43.68787, 362.43304)
