@@ -2,31 +2,29 @@
 
 ## What This Is
 
-A 3D drone flight simulator built in Godot 4.7 / GDScript. Started as a
-vibe-coding playground with the intent to iterate into a drone swarm simulator
-with realistic flight physics, autonomous routing, weather, and threat simulation.
+A 3D drone flight simulator built in Godot 4.7 / GDScript, iterating toward a
+drone swarm simulator with realistic flight physics, autonomous routing,
+weather, and threat simulation.
 
-**Current phase:** P2 complete (per-rotor thrust vectoring, assisted flight
-modes, crash / signal loss, terrain-aware wind), plus **P3 project health**:
-GitHub upstream with CI (`.github/workflows/ci.yml`), MIT license, JSONL
-flight telemetry (`FlightRecorder`), an itch.io web export (`export_web.sh`,
-`docs/publishing.md`), and a GitHub Pages class reference generated from
-GDScript `##` doc comments — keep public members documented; the docs CI job
-fails on malformed doc comments (bare `[...]` parses as BBCode). **P4
-real-world terrain**: `main.tscn` now flies over the Sebexen valley (Lower
-Saxony), baked offline from LGLN DGM1 elevation + OSM data by
-`tools/bake_map.py` into `assets/maps/sebexen/` and loaded at runtime by
-`OsmTerrain` (heightmap mesh + collision + baked albedo texture,
-road/water/forest classes, a chunked/LOD'd forest of pine + roadside/garden
-deciduous trees with trunk colliders, extruded buildings with gable/flat
-roofs). **P5 gamification**: an analog-FPV look and objectives — a PS2-era
-post shader that doubles as the signal-static shader for both views, a unified
-`SignalField` signal-quality scalar (map-boundary belt + jammers) driving FPV
-static, control packet loss and sustained-zero signal loss, an
-`AirspaceControl` radar ceiling (shoot-down stub via `lose_signal()`), a
-PUBG-style compass tape, editor-placeable `MissionTarget`s (observe/crash) with
-a `MissionTracker`, and a Blender-authored `JammingNode` EW truck.
-See `PROJECT_SUMMARY.md` for detailed architecture and tuning parameters.
+**Current phase:** P5 complete. Shipped so far:
+- **P2** — per-rotor thrust vectoring, assisted flight modes (altitude
+  hold + brake), crash / signal loss, terrain-aware wind.
+- **P3** — project health: GitHub upstream + CI
+  (`.github/workflows/ci.yml`), JSONL telemetry (`FlightRecorder`), itch.io
+  web export (`export_web.sh`, `docs/publishing.md`), and a GitHub Pages class
+  reference generated from GDScript `##` doc comments.
+- **P4** — real-world terrain: the Sebexen valley (Lower Saxony), baked
+  offline from LGLN DGM1 + OSM by `tools/bake_map.py`, loaded by `OsmTerrain`.
+- **P5** — gamification: analog-FPV PS2 post/static shader, a unified
+  `SignalField` scalar (boundary belt + jammers), `AirspaceControl` radar
+  ceiling, compass tape, `MissionTarget`s + `MissionTracker`, `JammingNode`.
+
+**`PROJECT_SUMMARY.md` is the deep-dive reference** — architecture, per-system
+internals, and all tuning parameters live there. This file stays a lean guide:
+conventions, file-map, canonical coordinate system, controller layout, and
+known issues, with pointers into the summary for detail. **Doc-comment
+gotcha:** the docs CI job fails on a bare `[...]` in a GDScript `##` comment
+(parses as BBCode) — keep public members documented and escape brackets.
 
 ## Tech Stack
 
@@ -35,11 +33,10 @@ See `PROJECT_SUMMARY.md` for detailed architecture and tuning parameters.
 - **Physics:** Jolt Physics (3D)
 - **Renderer:** gl_compatibility (low-poly aesthetic, lightweight, VR-friendly later)
 - **Controller:** DualSense (PS5) via Godot input system
-- **Godot MCP:** `@coding-solo/godot-mcp` available for editor automation
-  (run/stop scenes, read debug output — use it to syntax-check GDScript)
-- **Blender MCP:** available in this workspace for driving Blender directly
-  (inspect/edit `drone_parts.blend` / `jammer.blend`, re-export GLBs) when
-  connected
+- **Godot MCP:** `@coding-solo/godot-mcp` — run/stop scenes, read debug output,
+  syntax-check GDScript
+- **Blender MCP:** drives Blender directly (inspect/edit `drone_parts.blend` /
+  `jammer.blend`, re-export GLBs) when connected
 
 ## Architecture
 
@@ -60,16 +57,13 @@ scenes/
     mission_test_scene.tscn
 scripts/
   drone/
-    drone_controller.gd          Core controller — input, mixer, damping,
-                                 crash detection + FLYING/CRASHED state,
-                                 relative-airspeed wind drag
+    drone_controller.gd          Core — input, mixer, damping, FLYING/CRASHED, wind drag
     flight_mode_base.gd          Abstract base — FlightControl, RotorMix
     flight_mode_acro.gd          Idle-floor throttle + expo differential, no auto-level
     flight_mode_stabilized.gd    PD auto-level + rate mode
-    flight_mode_altitude_hold.gd Post-compute collective filter (not a mode)
+    flight_mode_altitude_hold.gd Post-compute collective filter (assist, not a mode)
     brake_assist.gd              Rotor-thrust tilt brake (assist, not a mode)
-    drone_body_mesh.gd           Procedural rhombic body (RETIRED — superseded
-                                 by drone_body.glb; kept for reference only)
+    drone_body_mesh.gd           Procedural body (RETIRED — kept for reference)
     debug_axes.gd                RGB orientation arrows
   camera/
     chase_camera.gd              FPV + chase camera (FPV rotation smoothed)
@@ -77,20 +71,17 @@ scripts/
     terrain_generator.gd         Procedural noise terrain (retired from main)
     osm_terrain.gd               Real-world terrain from baked map assets (P4)
     crash_effects.gd             Dust burst on crash (listens to crash_detected)
-    wind_field.gd                Terrain-aware prevailing wind (group "wind_field")
+    wind_field.gd                Terrain-aware wind (group "wind_field")
     wind_particles.gd            Advected wind-streak MultiMesh (child of WindField)
-    flight_recorder.gd           JSONL telemetry per physics tick (P3) —
-                                 user://telemetry/, rotates on drone_reset
-    signal_field.gd              Signal-quality field: boundary belt + jammers,
-                                 fog wall (group "signal_field", P5)
+    flight_recorder.gd           JSONL telemetry per tick → user://telemetry/ (P3)
+    signal_field.gd              Signal quality: boundary belt + jammers + fog wall (P5)
   mission/
     airspace_control.gd          Radar ceiling / shoot-down stub (P5)
     mission_target.gd            MissionTarget observe/crash, @tool (P5)
     mission_tracker.gd           Fires mission_completed when all cleared (P5)
     jamming_node.gd              JammingNode EW truck, group "jammers" (P5)
   ui/
-    debug_hud.gd                 Telemetry + wind arrow + compass tape + radar/
-                                 mission banners + PS2/static post shader (P5)
+    debug_hud.gd                 Telemetry + wind arrow + compass + banners + post shader
   test/
     flight_mode_test.gd          15 headless tests
     wind_field_test.gd           6 headless wind-field tests
@@ -98,168 +89,65 @@ scripts/
     osm_terrain_test.gd          8 headless map/terrain tests (P4)
     mission_test.gd              4 headless mission/signal tests (P5)
     mock_hill_terrain.gd         Deterministic terrain stand-in for wind tests
-assets/shaders/
-    ps2_post.gdshader            PS2 look + analog signal static, both views (P5)
-tools/
-  bake_map.py                    Offline DGM1+OSM → baked map assets (P4);
-                                 inputs in tools/map_sources/ (gitignored)
 assets/
-  maps/sebexen/                  Baked map: heightmap.bin, classmap.bin,
-                                 map.json (checked in; see bake_map.py header)
-  materials/
-  models/
-    drone_parts.blend            Source: full drone (body, 4 arms, 4 props)
-    drone_body.glb               Exported body mesh (Mat_body); nose faces +Y
-                                 in Blender → Godot −Z (forward)
-    arm.glb                      Exported single arm mesh (Mat_arm)
-    propeller.glb                Front prop (Mat_prop_front, cyan) + back prop
-                                 (Mat_prop_back, pink) for orientation
-    jammer.blend                 Source: EW/jammer truck (P5, standalone)
-    jammer.glb                   Exported jammer mesh (JammingNode visual)
-  textures/
+  shaders/ps2_post.gdshader      PS2 look + analog signal static, both views (P5)
+  maps/sebexen/                  Baked map (heightmap/classmap/map.json/albedo, checked in)
+  models/                        drone_parts.blend + GLBs; jammer.blend + jammer.glb (P5)
+tools/
+  bake_map.py                    Offline DGM1+OSM → baked map assets (P4)
 ```
 
 ### Drone geometry
 
-The drone's body, arms, and propellers are authored in Blender
-(`drone_parts.blend`) and exported as GLB. `drone.tscn` holds bare `Node3D`
-marker nodes (Body, RotorFL/FR/BL/BR, ArmFL/FR/BL/BR) at the correct local
-transforms — markers rather than `MeshInstance3D` so the editor shows no
-"missing mesh" warnings. `DroneController._setup_visuals()` loads each GLB and
-attaches its mesh as a `MeshInstance3D` child of the matching marker at runtime. Front rotors (FL/FR) use the
-cyan `Mat_prop_front` prop, back rotors (BL/BR) the pink `Mat_prop_back` prop,
-for at-a-glance orientation. When armed (throttle > 0) each rotor swaps its prop
-for a translucent blur disc built in code, tinted to that prop's color. Static
-prop colors are authored in Blender; the spin-disc color is derived from them in
-`DroneController._setup_visuals()`.
+Body / arms / props authored in Blender (`drone_parts.blend`), exported as
+GLB. `drone.tscn` holds bare `Node3D` markers at the correct transforms (no
+"missing mesh" editor warnings); `DroneController._setup_visuals()` attaches
+the GLB meshes at runtime, tints props (front cyan / back pink), and swaps in
+code-built blur discs when armed. Nose faces −Z. Full detail:
+`PROJECT_SUMMARY.md → Drone Geometry`.
 
 ### Flight Pipeline
 
-```
-Mode.compute() → FlightControl(collective, pitch_diff, roll_diff, yaw_torque)
-       ↓
-_mix_rotors()  → RotorMix(fl, fr, bl, br)  ← anti-clip scaling, MIN_ROTOR
-       ↓
-apply_force() at 4 rotor positions + apply_torque() for yaw
-       ↓
-_apply_angular_damping()  ← per-axis damping
-```
+Three layers: `Mode.compute()` → `FlightControl` → `_mix_rotors()` (anti-clip
+scaling + MIN_ROTOR) → `RotorMix` → `apply_force()` at 4 rotor positions +
+`apply_torque()` for yaw → `_apply_angular_damping()`. Full breakdown:
+`PROJECT_SUMMARY.md → Three-Layer Flight Pipeline`.
 
-### Crash / signal loss (P2 Phase C)
+### Per-system detail — see PROJECT_SUMMARY.md
 
-`DroneController` has two states: `FLYING` and `CRASHED`. Detection lives in
-`_integrate_forces` — not the `body_entered` signal, which carries no contact
-normal (contact reporting needs `contact_monitor = true` +
-`max_contacts_reported = 4` on the RigidBody3D, set in `drone.tscn` along with
-`continuous_cd = true` — without CCD the thin drone body tunnels through
-geometry above ~10 m/s, which fast dives easily exceed). A contact
-crashes only if impact momentum exceeds `crash_momentum_threshold` (8 kg·m/s
-≈ 4 m/s; the spawn free-fall onto the pad arrives at ~6.1, which must bounce)
-**and** the hit is direct (−velocity within `crash_max_impact_angle_deg` = 60°
-of the contact normal); anything slower or more grazing just bounces. The
-impact velocity is `_prev_velocity` (cached each physics tick) because the
-solver has already absorbed the impact from `linear_velocity` by the time the
-contact is reported.
+The deep-dive lives in `PROJECT_SUMMARY.md`. Load-bearing invariants that are
+easy to break, kept here as terse warnings:
 
-On crash the "signal" is lost: rotor forces stop (physics tumbles the airframe
-naturally — no magic forces), inputs are ignored except **Triangle** (reset)
-and **R1** (camera toggle — the camera belongs to the pilot, not the dead
-drone; L1 mode toggle is ignored). The HUD shows a pulsing SIGNAL LOST banner.
-The FPV *feed* dies at the crash instant: crash in FPV → the last rendered
-frame stays frozen on screen; crash in 3PV → no frame was captured, so
-switching to FPV shows a black "no signal" screen. Chase cam always renders
-live. Reset restores everything.
-
-Environment-side crash effects (a ~5m white-sand dust burst that hangs for
-~10-13s at the impact point) live in `scripts/environment/crash_effects.gd`,
-a `Node3D` in `main.tscn` that listens to the drone's `crash_detected` signal —
-the controller owns flight/crash logic only; what the world does in response
-does not belong in it. The dust emits in world space (`top_level`), so it stays
-put while the wreck tumbles. Purely visual, no collision or forces.
-
-### Wind (P2 Phase D)
-
-Wind acts as **relative-airspeed drag**, not a magic push:
-`apply_central_force(air_drag_coefficient * (wind_velocity - linear_velocity))`
-in `drone_controller.gd::_physics_process`, applied **before** the
-FLYING/CRASHED gate so a crashed wreck still drifts downwind (same as before).
-This drag force *replaced* the old `linear_damp = 0.5` on the RigidBody3D
-(now `0.0`) — `air_drag_coefficient = 1.0` N·s/m at `mass = 2.0` kg reproduces
-the old damping exactly in still air, on top of the untouched engine default
-`physics/3d/default_linear_damp = 0.1`. **Do not re-add body `linear_damp`**
-to tune drift or damping feel; that silently breaks the parity argument and
-double-damps on top of the drag force. Tune `air_drag_coefficient` instead.
-
-`WindField` (`scripts/environment/wind_field.gd`) is a `Node3D` in
-`main.tscn` — same environment-side pattern as `CrashEffects`, not an
-autoload — self-registered into group `"wind_field"`. `DroneController`
-resolves it lazily via `get_tree().get_first_node_in_group("wind_field")` on
-first use (not `_ready()` — Drone precedes WindField in `main.tscn`'s tree
-order). **No `WindField` in a scene means zero wind everywhere** — this is
-why the flight-mode test scene (which has none) needed no changes to stay
-green. `get_wind(pos)` shapes speed and direction from terrain: a protected
-calm zone around the spawn pad, an altitude-above-ground profile, upwind
-ridge shelter (valleys behind ridges go calm), a ridge speed boost, and
-horizontal deflection + updraft around windward slopes (rotates the wind
-vector, doesn't attenuate it), plus gentle gust/direction noise. Terrain
-access is duck-typed on `get_height(x, z)` with a flat-ground fallback, so it
-works with no terrain node.
-
-Visualized two ways: `scripts/environment/wind_particles.gd`
-(`WindParticles`, a `MultiMeshInstance3D` child of `WindField`) advects ~300
-thin streak instances through a volume centered on the drone, each sampling
-`get_wind()` at its own position on a staggered schedule — a custom system
-because `CPUParticles3D` can't sample per-particle forces; and a small
-camera-relative HUD arrow in `debug_hud.gd` (same projection as the axis
-gizmo) showing the ambient wind at the drone, with size/alpha scaling by
-speed and an `m/s` readout, dimming on crash like the rest of the telemetry.
-
-### Real-world terrain (P4)
-
-`main.tscn`'s `Terrain` node is now `OsmTerrain`
-(`scripts/environment/osm_terrain.gd`), which loads baked assets from
-`assets/maps/sebexen/` — a float32 heightmap grid (2 m cells, 3.4 × 2.4 km of
-the Sebexen valley from LGLN DGM1 lidar), a uint8 land-class grid
-(field/forest/water/road rasterized from OSM), a 1 m/px `albedo.png` ground
-color texture (field/forest/water/road palette with altitude+slope field
-tint, baked — the terrain mesh is UV-mapped to it, no per-vertex class
-colors at runtime), building footprints, and roadside/garden deciduous tree
-positions, all in `map.json`. The local frame's origin is the spawn point (a
-flat field NE of the village); the pad flatten is applied to the loaded grid
-itself so mesh, collision (`HeightMapShape3D`, full-res) and `get_height()`
-agree by construction. `get_height(x, z)` keeps the same duck-typed contract
-as `TerrainGenerator`, so `WindField` shapes wind around the real ridges with
-no changes. The bake is offline and one-time: `tools/bake_map.py` (see its
-header for the venv setup and the no-API-key DGM1 tile download; see
-`docs/new-map.md` for adapting it to a new area); raw inputs live in
-`tools/map_sources/` (gitignored), baked outputs are checked in.
-`export_presets.cfg` needs `include_filter="assets/maps/*"` because `.bin`/
-`.json`/`.png` are not Godot resources — without it the web export ships no
-map.
-
-Buildings get a gable roof (ridge along the shorter edge pair) when their
-footprint is a 4-corner polygon under 250 m²; larger/irregular footprints
-keep a flat roof. Winding is normalized via shoelace area so backface
-culling stays on — no `cull_mode` override.
-
-The forest is pine (scattered onto forest-class cells,
-`tree_density_per_km2 = 10000`, ~20k trees) plus baked-in deciduous
-roadside/garden trees from `map.json`. Trees are chunked into
-`forest_chunk_size` (128 m) squares, each with a near-tier MultiMesh pair
-(full trunk+canopy) and a far-tier merged-cone MultiMesh switched via
-`GeometryInstance3D.visibility_range_begin/end`
-(`forest_lod_near_distance = 300`, `forest_lod_fade_margin = 30`) — LOD
-granularity is chunk-sized because `visibility_range` is a per-node
-property. Trunk colliders (`tree_collision = true`) are cylinders added
-directly via `PhysicsServer3D.body_add_shape`, batched 200 shapes/body (one
-shape per `body_add_shape` call scales worse than O(1) as a body's shape
-count grows; one body per shape hits Jolt's default 10240-body cap) — no
-`CollisionShape3D` nodes. Canopies are non-solid; colliders are skipped in
-the editor.
-
-The procedural `TerrainGenerator` + `Scatter` (`terrain.tscn`) are retired
-from `main.tscn` but kept working for reference; wind tests still use
-`mock_hill_terrain.gd`.
+- **Crash / signal loss (P2):** two states `FLYING` / `CRASHED`, detected in
+  `_integrate_forces` (needs `contact_monitor` + `continuous_cd` in
+  `drone.tscn` — without CCD the thin body tunnels above ~10 m/s). On crash,
+  rotor forces stop and physics tumbles the airframe — **no magic forces**.
+  Environment-side reactions (dust burst) live in `crash_effects.gd`, not the
+  controller. Detail: `PROJECT_SUMMARY.md → drone_controller.gd`,
+  `crash_effects.gd`.
+- **Wind (P2):** relative-airspeed drag, not a magic push. **Do not re-add
+  body `linear_damp`** to tune drift/damping — `air_drag_coefficient = 1.0`
+  at `mass = 2.0` reproduces the old `linear_damp = 0.5` exactly in still air;
+  re-adding it double-damps and silently breaks that parity. Tune
+  `air_drag_coefficient` instead. `WindField` is an environment-side node
+  (group `"wind_field"`, lazily resolved); **no `WindField` in a scene = zero
+  wind everywhere**. Detail: `PROJECT_SUMMARY.md → wind_field.gd`,
+  `wind_particles.gd`, and the Wind Drag note.
+- **Real-world terrain (P4):** `OsmTerrain` loads baked assets from
+  `assets/maps/sebexen/`; `get_height(x, z)` keeps the same duck-typed
+  contract as `TerrainGenerator` so `WindField` needs no changes.
+  `export_presets.cfg` needs `include_filter="assets/maps/*"` — the baked
+  `.bin`/`.json`/`.png` are not Godot resources and would otherwise be
+  dropped from the web export. The procedural `TerrainGenerator` is retired
+  from `main.tscn` but kept for reference/wind tests. Detail:
+  `PROJECT_SUMMARY.md → Real-World Terrain (P4)`.
+- **Gamification (P5):** one `SignalField` scalar (0..1) feeds the static
+  shader, control packet loss, and (sustained-zero) `lose_signal()` — the
+  crash transition minus the impact check, still **rotor-only, no magic
+  force**. `AirspaceControl` radar ceiling reuses the same `lose_signal()`.
+  All P5 nodes follow the WindField pattern (group-registered, lazily
+  resolved, absent node = neutral). Detail: `PROJECT_SUMMARY.md →
+  Gamification (P5)`.
 
 ### Extension Points
 
@@ -341,13 +229,12 @@ The `_rotor_positions` array order is `[FL, FR, BL, BR]` and the mixer output
 - **Run tests:** `./run_tests.sh` (all five headless suites; new
   `class_name`s need a `godot --headless --path . --import` first if the
   editor isn't open to refresh the global class cache)
-- **Re-export the jammer mesh** (only when editing `jammer.blend`): open it in
-  Blender, then via the Blender MCP flush to Object Mode and
-  `export_scene.gltf(use_selection=True)` to `assets/models/jammer.glb`;
-  Godot only reimports a changed `.glb` on editor focus or `--import`
 - **Re-bake the map** (only when map data/extent/spawn changes):
   `.venv/bin/python tools/bake_map.py` — see the script header for venv
   setup and DGM1 tile downloads
+- **Re-export a Blender mesh** (`jammer.blend`, `drone_parts.blend`): export the
+  GLB via the Blender MCP; Godot reimports a changed `.glb` on editor focus or
+  `--import`
 - **Run game:** F6 in editor or `godot --path .`
 - **Web export:** `./export_web.sh` → `build/dronesim-web.zip` (itch.io flow
   in `docs/publishing.md`)
@@ -390,30 +277,17 @@ correct-looking `project.godot` entry, check this first.
   (`test_stabilized_roll_does_not_induce_yaw_spin`) only asserts the coupling
   stays bounded (<45° heading delta), not that it's absent.
 - **Stabilized mode "jump" when releasing stick near level**
-  (`flight_mode_stabilized.gd`): rate-mode (stick active) and auto-level
-  (stick released) are two entirely different control laws — rate-PD on
-  angular velocity (`rate_p_gain = 4.0`) vs. angle-PD in world frame
-  (`stabilize_p_gain = 15.0`, ~4x stronger gain-equivalent at the same tilt).
-  The switch at `input_deadzone = 0.05` is a hard binary swap with no
-  blending, so releasing the stick while still tilted can produce a visible
-  torque discontinuity ("snap" into level) as the controller jumps from a
-  modest rate-correction to a much more aggressive angle-correction. This is
-  compounded by `_apply_angular_damping()` in `drone_controller.gd` damping
-  the **raw** angular velocity every tick, stacked on the flight mode's own
-  D-term which uses the **filtered** angular velocity — a brief mismatch
-  right at the mode-switch instant. Likely fix: blend between the two
-  control laws across the deadzone instead of hard-switching.
+  (`flight_mode_stabilized.gd`): rate-mode and auto-level are two different
+  control laws, hard-switched at `input_deadzone` with no blending — releasing
+  the stick while still tilted can snap into level. Likely fix: blend the two
+  laws across the deadzone. Full rationale:
+  `PROJECT_SUMMARY.md → flight_mode_stabilized.gd`.
 - **Stabilized mode feels "sticky" near level under active stick input**
-  (`flight_mode_stabilized.gd`): the gyro low-pass filter
-  (`gyro_filter_alpha = 0.35`, added to fix PD limit-cycle jitter) is reused
-  for the rate-mode branch's `rate_error = target_rate - local_ang_vel`, not
-  just the auto-level D-term. That filter adds ~1-2 frames of lag to the
-  pilot's own control feedback loop. Near level, commanded rates from small
-  stick deflections are already tiny, so the lag is proportionally more
-  noticeable there than during large, fast stick inputs — reads as
-  sluggish/resistant response. Likely fix: use two separate filtered signals
-  — heavily-filtered for auto-level's D-term (noise rejection), raw or
-  lightly-filtered for rate-mode's feedback (responsiveness).
+  (`flight_mode_stabilized.gd`): the auto-level gyro low-pass filter is reused
+  for rate-mode's feedback, adding lag that's proportionally worse for the
+  small commanded rates near level. Likely fix: separate filtered signals for
+  the two paths. Full rationale:
+  `PROJECT_SUMMARY.md → flight_mode_stabilized.gd`.
 
 ## License
 

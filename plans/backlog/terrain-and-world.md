@@ -7,12 +7,6 @@ for a side-branch that doesn't compete with core sim work.
 
 - **Real locations via OpenStreetMap** — swap or supplement the noise-based
   terrain generator with an OSM-based backend for real-world terrain data.
-- **Buildings** — generate/import structures from OSM building footprints,
-  giving crash detection and wind deflection real obstacles beyond
-  procedural trees/rocks.
-
-Open question: how far to go before this needs its own plan doc (data
-fetching/caching, coordinate projection, LOD for large areas).
 
 - **Better map-edge horizon** (noted during P5) — the `TerrainApron` ring in
   `osm_terrain.gd` (edge heights continued outward 2 km, edge-smeared albedo,

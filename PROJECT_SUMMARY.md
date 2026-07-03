@@ -157,9 +157,31 @@ Two sub-modes:
   tapers to zero as angle approaches 0 on its own). D gain always active,
   driven off a one-pole low-pass-filtered gyro reading (`gyro_filter_alpha =
   0.35`) rather than raw angular velocity, to kill PD limit-cycle jitter.
-  `stabilize_p_gain = 15.0`, `stabilize_d_gain = 4.0`. The same filtered gyro
-  signal also feeds rate-mode's D-term — see AGENTS.md "Known Issues" for the
-  lag/jump tradeoffs that shared filter causes.
+  `stabilize_p_gain = 15.0`, `stabilize_d_gain = 4.0`.
+
+Two known control-law rough edges (symptoms flagged in AGENTS.md "Known
+Issues"; full rationale here):
+- **"Jump" when releasing stick near level.** Rate-mode and auto-level are
+  two entirely different laws — rate-PD on angular velocity
+  (`rate_p_gain = 4.0`) vs. angle-PD in the world frame
+  (`stabilize_p_gain = 15.0`, ~4× stronger gain-equivalent at the same tilt).
+  The switch at `input_deadzone = 0.05` is a hard binary swap with no
+  blending, so releasing the stick while still tilted produces a torque
+  discontinuity (a visible "snap" into level) as the controller jumps from a
+  modest rate-correction to a much more aggressive angle-correction. Compounded
+  by `drone_controller.gd::_apply_angular_damping()` damping the **raw**
+  angular velocity every tick, stacked on the mode's own D-term which uses the
+  **filtered** velocity — a brief mismatch at the switch instant. Likely fix:
+  blend the two laws across the deadzone instead of hard-switching.
+- **"Sticky" near level under active stick.** The gyro low-pass filter
+  (`gyro_filter_alpha = 0.35`, added to kill PD limit-cycle jitter) is reused
+  for the rate-mode branch's `rate_error = target_rate - local_ang_vel`, not
+  just the auto-level D-term, adding ~1–2 frames of lag to the pilot's own
+  feedback loop. Near level the commanded rates are already tiny, so the lag is
+  proportionally more noticeable there than under large fast inputs — reads as
+  sluggish. Likely fix: two separate filtered signals — heavily-filtered for
+  auto-level's D-term (noise rejection), raw/lightly-filtered for rate-mode's
+  feedback (responsiveness).
 
 ### `scripts/drone/flight_mode_altitude_hold.gd` — Altitude Hold (assist, not a mode)
 
