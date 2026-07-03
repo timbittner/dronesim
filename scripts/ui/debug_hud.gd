@@ -19,6 +19,14 @@ extends CanvasLayer
 @export_range(1.0, 6.0) var ps2_pixel_size: float = 2.0
 @export_range(0.0, 0.5) var ps2_fisheye_strength: float = 0.1
 
+## Always-on static floor in FPV — it's a radio feed, never perfectly clean.
+## Live intensity = baseline + (1 - drone.signal_quality).
+@export_range(0.0, 0.3) var fpv_static_baseline: float = 0.05
+## Static level over the dead FPV feed after a crash. Heavy, but low enough
+## that the frozen last frame stays readable underneath (1.0 = pure snow —
+## the shader mixes 90% snow at full intensity, burying the frame).
+@export_range(0.0, 1.0) var crash_static_intensity: float = 0.45
+
 var _drone: DroneController
 var _frame_count: int = 0
 
@@ -51,11 +59,16 @@ var _wind_arrow_dir: Vector2 = Vector2.RIGHT
 var _gizmo_font: Font
 var _gizmo_font_size: int = 14
 
-# Full-screen post shaders live on their own CanvasLayer BELOW this HUD's
-# layer: hint_screen_texture there captures only the 3D render, so telemetry
+# The full-screen post shader lives on its own CanvasLayer BELOW this HUD's
+# layer: hint_screen_texture there captures only the lower layers, so telemetry
 # panels and banners drawn on the HUD layer are never posterized/distorted.
+# Layer stack (bottom to top): 3D render → _feed_layer (dead-feed black/frozen
+# frame) → _post_layer (PS2 look + analog static, one shader, both views — its
+# screen texture includes the dead feed, so full static renders OVER the crash
+# freeze frame) → this HUD layer.
+var _feed_layer: CanvasLayer
 var _post_layer: CanvasLayer
-var _ps2_rect: ColorRect  # PS2-era look, 3PV only
+var _ps2_rect: ColorRect  # PS2 look + signal static, always on
 
 
 func _ready() -> void:
@@ -83,13 +96,18 @@ func _process(delta: float) -> void:
 
 	_update_crash_overlay(delta)
 
-	if _ps2_rect.visible:
-		var mat := _ps2_rect.material as ShaderMaterial
-		mat.set_shader_parameter("color_levels", ps2_color_levels)
-		mat.set_shader_parameter("dither_strength", ps2_dither_strength)
-		mat.set_shader_parameter("vignette_strength", ps2_vignette_strength)
-		mat.set_shader_parameter("pixel_size", ps2_pixel_size)
-		mat.set_shader_parameter("fisheye_strength", ps2_fisheye_strength)
+	var fpv: bool = _drone.is_fpv_enabled()
+	var intensity: float = clampf(
+		(fpv_static_baseline if fpv else 0.0) + (1.0 - _drone.signal_quality), 0.0, 1.0)
+	if fpv and _drone.is_crashed():
+		intensity = crash_static_intensity  # dead feed: heavy static, frame readable
+	var mat := _ps2_rect.material as ShaderMaterial
+	mat.set_shader_parameter("color_levels", ps2_color_levels)
+	mat.set_shader_parameter("dither_strength", ps2_dither_strength)
+	mat.set_shader_parameter("vignette_strength", ps2_vignette_strength)
+	mat.set_shader_parameter("pixel_size", ps2_pixel_size)
+	mat.set_shader_parameter("fisheye_strength", ps2_fisheye_strength)
+	mat.set_shader_parameter("static_intensity", intensity)
 
 	var telemetry: Dictionary = _gather_telemetry()
 	_label.text = _format_telemetry(telemetry)
@@ -125,8 +143,7 @@ func _on_crash_detected() -> void:
 	_update_dead_feed_visibility()
 
 
-func _on_fpv_toggled(enabled: bool) -> void:
-	_ps2_rect.visible = not enabled  # PS2 look is the 3PV "game" view only
+func _on_fpv_toggled(_enabled: bool) -> void:
 	_update_dead_feed_visibility()
 
 
@@ -183,6 +200,7 @@ func _gather_telemetry() -> Dictionary:
 		"altitude_hold_engaged": _drone._altitude_hold_engaged,
 		"brake_engaged": _drone._brake_engaged,
 		"crashed": _drone.is_crashed(),
+		"signal_pct": _drone.signal_quality * 100.0,
 	}
 
 
@@ -209,6 +227,7 @@ func _format_telemetry(t: Dictionary) -> String:
 		+ "Roll angle  : %+6.1f°\n" % t["roll_deg"]
 		+ "Speed       : %5.1f m/s\n" % t["speed_mps"]
 		+ "Altitude    : %+6.1f m\n" % t["altitude"]
+		+ "Signal      : %5.1f%%\n" % t["signal_pct"]
 	)
 
 
@@ -217,14 +236,31 @@ func _format_telemetry_compact(t: Dictionary) -> String:
 		"mode=%s fpv=%s alt_hold=%s brake=%s crashed=%s thr=%.0f%% sticks=[p%+.2f r%+.2f y%+.2f t%+.2f] "
 		% [t["flight_mode"], t["fpv_enabled"], t["altitude_hold_engaged"], t["brake_engaged"],
 		   t["crashed"], t["throttle_pct"], t["pitch_stick"], t["roll_stick"], t["yaw_stick"], t["throttle_stick"]]
-		+ "H=%.1f° P=%.1f° R=%.1f° spd=%.1f alt=%.1f"
+		+ "H=%.1f° P=%.1f° R=%.1f° spd=%.1f alt=%.1f sig=%.0f%%"
 		% [t["heading_deg"], t["pitch_deg"], t["roll_deg"],
-		   t["speed_mps"], t["altitude"]]
+		   t["speed_mps"], t["altitude"], t["signal_pct"]]
 	)
 
 
 func _build_ui() -> void:
-	# Post-shader layer below the HUD layer (see _post_layer declaration).
+	# Layer stack below the HUD layer (see _feed_layer/_post_layer declaration).
+	_feed_layer = CanvasLayer.new()
+	_feed_layer.layer = layer - 2
+	add_child(_feed_layer)
+
+	_feed_black = ColorRect.new()
+	_feed_black.color = Color.BLACK
+	_feed_black.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_feed_black.visible = false
+	_feed_layer.add_child(_feed_black)
+
+	_feed_frozen = TextureRect.new()
+	_feed_frozen.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_feed_frozen.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_feed_frozen.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	_feed_frozen.visible = false
+	_feed_layer.add_child(_feed_frozen)
+
 	_post_layer = CanvasLayer.new()
 	_post_layer.layer = layer - 1
 	add_child(_post_layer)
@@ -235,28 +271,13 @@ func _build_ui() -> void:
 	var ps2_mat := ShaderMaterial.new()
 	ps2_mat.shader = load("res://assets/shaders/ps2_post.gdshader")
 	_ps2_rect.material = ps2_mat
-	_ps2_rect.visible = true  # game starts in 3PV
 	_post_layer.add_child(_ps2_rect)
-
-	# Dead-feed layer added first so it draws under the telemetry panels.
-	_feed_black = ColorRect.new()
-	_feed_black.color = Color.BLACK
-	_feed_black.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_feed_black.visible = false
-	add_child(_feed_black)
-
-	_feed_frozen = TextureRect.new()
-	_feed_frozen.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_feed_frozen.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	_feed_frozen.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
-	_feed_frozen.visible = false
-	add_child(_feed_frozen)
 
 	_bg = ColorRect.new()
 	_bg.color = Color(0.0, 0.0, 0.0, 0.65)
 	_bg.set_anchors_preset(Control.PRESET_TOP_LEFT)
 	_bg.offset_right = 280.0
-	_bg.offset_bottom = 356.0
+	_bg.offset_bottom = 374.0  # fits the telemetry text incl. the signal line
 	_bg.offset_left = 8.0
 	_bg.offset_top = 8.0
 	add_child(_bg)
@@ -267,7 +288,7 @@ func _build_ui() -> void:
 	_label.offset_left = 14.0
 	_label.offset_top = 14.0
 	_label.offset_right = 282.0
-	_label.offset_bottom = 358.0
+	_label.offset_bottom = 376.0
 	_label.add_theme_color_override("font_color", Color(0.35, 1.0, 0.35))
 	_label.add_theme_color_override("font_outline_color", Color(0, 0, 0))
 	_label.add_theme_constant_override("outline_size", 2)

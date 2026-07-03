@@ -19,6 +19,12 @@ extends Node3D
 @export var mesh_step: float = 4.0
 ## Spawn pad flatten radius, matching TerrainGenerator (blend ends +8 m).
 @export var flat_radius: float = 10.0
+## Coarse far-terrain ring continuing the edge heights outward, so the map
+## doesn't end in a hard silhouette cut against the sky — it fades into the
+## distance fog instead. Purely visual (no collision). 0 disables.
+@export var apron_width: float = 2000.0
+## Meters between apron vertices. It's distant filler — keep it coarse.
+@export var apron_step: float = 64.0
 @export var tree_density_per_km2: float = 10000.0
 @export var tree_seed: int = 137
 ## Trunk-only physics colliders (canopies stay non-solid — flying through
@@ -77,6 +83,7 @@ func _ready() -> void:
 	_load_map()
 	_flatten_spawn_pad()
 	_build_terrain_mesh()
+	_build_apron()
 	_build_collision()
 	_build_forest()
 	_build_buildings()
@@ -137,6 +144,13 @@ func get_height(x: float, z: float) -> float:
 	var h01 := _grid[i + _w]
 	var h11 := _grid[i + _w + 1]
 	return lerpf(lerpf(h00, h10, fx), lerpf(h01, h11, fx), fz)
+
+
+## Map extent in world XZ (position = the north-west corner). Duck-typed like
+## get_height — SignalField uses it for the boundary belt; no get_bounds means
+## infinite bounds (perfect signal everywhere).
+func get_bounds() -> Rect2:
+	return Rect2(_origin_x, _origin_z, (_w - 1) * _cell, (_h - 1) * _cell)
 
 
 ## Land class (CLASS_*) at world (x, z), nearest cell.
@@ -228,6 +242,72 @@ func _build_terrain_mesh() -> void:
 
 	var mi := MeshInstance3D.new()
 	mi.name = "TerrainMesh"
+	mi.mesh = mesh
+	add_child(mi)
+
+
+## Visual-only ring around the map: get_height() edge-clamps, so heights just
+## continue flat outward from the boundary, and the albedo material samples
+## with texture_repeat off, smearing the edge pixels outward. Sits 0.5 m below
+## the real terrain and starts one step inside the map edge, so the real mesh
+## covers the seam from above. Fades into the distance fog long before its own
+## outer edge matters.
+func _build_apron() -> void:
+	if apron_width <= 0.0:
+		return
+	var inner := get_bounds().grow(-apron_step)
+	var outer := inner.grow(apron_width + apron_step)
+	var nx := int(ceilf(outer.size.x / apron_step)) + 1
+	var nz := int(ceilf(outer.size.y / apron_step)) + 1
+
+	var map_w := (_w - 1) * _cell
+	var map_h := (_h - 1) * _cell
+	var verts := PackedVector3Array()
+	var normals := PackedVector3Array()
+	var uvs := PackedVector2Array()
+	verts.resize(nx * nz)
+	normals.resize(nx * nz)
+	uvs.resize(nx * nz)
+	for zi in nz:
+		var z := outer.position.y + zi * apron_step
+		for xi in nx:
+			var x := outer.position.x + xi * apron_step
+			var vi := zi * nx + xi
+			verts[vi] = Vector3(x, get_height(x, z) - 0.5, z)
+			normals[vi] = Vector3.UP  # distant filler; flat lighting is fine
+			uvs[vi] = Vector2(
+				clampf((x - _origin_x) / map_w, 0.0, 1.0),
+				clampf((z - _origin_z) / map_h, 0.0, 1.0))
+
+	var indices := PackedInt32Array()
+	for zi in nz - 1:
+		for xi in nx - 1:
+			# Skip quads over the map interior — the real mesh covers them.
+			var center := Vector2(
+				outer.position.x + (xi + 0.5) * apron_step,
+				outer.position.y + (zi + 0.5) * apron_step)
+			if inner.has_point(center):
+				continue
+			var i00 := zi * nx + xi
+			indices.append_array(PackedInt32Array([
+				i00, i00 + 1, i00 + nx, i00 + 1, i00 + nx + 1, i00 + nx]))
+
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	arrays[Mesh.ARRAY_NORMAL] = normals
+	arrays[Mesh.ARRAY_TEX_UV] = uvs
+	arrays[Mesh.ARRAY_INDEX] = indices
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	var mat := StandardMaterial3D.new()
+	mat.albedo_texture = load(map_dir + "/albedo.png") as Texture2D
+	mat.texture_repeat = false  # clamp: smears edge pixels across the ring
+	mat.roughness = 0.9
+	mesh.surface_set_material(0, mat)
+
+	var mi := MeshInstance3D.new()
+	mi.name = "TerrainApron"
 	mi.mesh = mesh
 	add_child(mi)
 
