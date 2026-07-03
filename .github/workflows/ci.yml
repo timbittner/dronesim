@@ -38,9 +38,10 @@ jobs:
         run: ./godot-bin --headless --path . scenes/test/osm_terrain_test_scene.tscn
 
   # Class reference generated from GDScript ## doc comments → GitHub Pages.
+  # Runs the XML/RST build on every PR too (catches malformed doc comments,
+  # e.g. a bare "[...]" parsed as BBCode) but only deploys on push to main.
   # One-time repo setting required: Settings → Pages → Source: GitHub Actions.
   docs:
-    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       pages: write
@@ -86,8 +87,10 @@ jobs:
           python3 -m sphinx -b html docs docs/_build -q
 
       - uses: actions/upload-pages-artifact@v3
+        if: github.event_name == 'push'
         with:
           path: docs/_build
 
       - id: deployment
+        if: github.event_name == 'push'
         uses: actions/deploy-pages@v4

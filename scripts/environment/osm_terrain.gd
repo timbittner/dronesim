@@ -397,8 +397,8 @@ func _scatter_pine_transforms() -> Array[Transform3D]:
 	return transforms
 
 
-## map.json's "trees" entries are [x, z, scale]; rotation is free (not baked)
-## so it's assigned here from tree_seed like the pine scatter.
+## map.json's "trees" entries are (x, z, scale) triples; rotation is free
+## (not baked) so it's assigned here from tree_seed like the pine scatter.
 func _load_deciduous_transforms() -> Array[Transform3D]:
 	var transforms: Array[Transform3D] = []
 	var rng := RandomNumberGenerator.new()
