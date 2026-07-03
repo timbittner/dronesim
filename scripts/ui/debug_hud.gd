@@ -9,6 +9,16 @@ extends CanvasLayer
 @export var drone_path: NodePath = NodePath("../Drone")
 @export var print_interval: int = 60  # frames between console telemetry prints
 
+## PS2-look tuning, mirrored onto the shader every frame — the ShaderMaterial
+## is built in code, and the remote inspector can't edit runtime sub-resources,
+## so these exports are the live-tunable knobs (select DebugHud remotely).
+@export_group("PS2 Look")
+@export_range(4.0, 64.0) var ps2_color_levels: float = 16.0
+@export_range(0.0, 2.0) var ps2_dither_strength: float = 1.0
+@export_range(0.0, 1.0) var ps2_vignette_strength: float = 0.8
+@export_range(1.0, 6.0) var ps2_pixel_size: float = 2.0
+@export_range(0.0, 0.5) var ps2_fisheye_strength: float = 0.1
+
 var _drone: DroneController
 var _frame_count: int = 0
 
@@ -41,6 +51,12 @@ var _wind_arrow_dir: Vector2 = Vector2.RIGHT
 var _gizmo_font: Font
 var _gizmo_font_size: int = 14
 
+# Full-screen post shaders live on their own CanvasLayer BELOW this HUD's
+# layer: hint_screen_texture there captures only the 3D render, so telemetry
+# panels and banners drawn on the HUD layer are never posterized/distorted.
+var _post_layer: CanvasLayer
+var _ps2_rect: ColorRect  # PS2-era look, 3PV only
+
 
 func _ready() -> void:
 	_drone = get_node_or_null(drone_path) as DroneController
@@ -66,6 +82,14 @@ func _process(delta: float) -> void:
 		_connect_drone_signals()
 
 	_update_crash_overlay(delta)
+
+	if _ps2_rect.visible:
+		var mat := _ps2_rect.material as ShaderMaterial
+		mat.set_shader_parameter("color_levels", ps2_color_levels)
+		mat.set_shader_parameter("dither_strength", ps2_dither_strength)
+		mat.set_shader_parameter("vignette_strength", ps2_vignette_strength)
+		mat.set_shader_parameter("pixel_size", ps2_pixel_size)
+		mat.set_shader_parameter("fisheye_strength", ps2_fisheye_strength)
 
 	var telemetry: Dictionary = _gather_telemetry()
 	_label.text = _format_telemetry(telemetry)
@@ -101,7 +125,8 @@ func _on_crash_detected() -> void:
 	_update_dead_feed_visibility()
 
 
-func _on_fpv_toggled(_enabled: bool) -> void:
+func _on_fpv_toggled(enabled: bool) -> void:
+	_ps2_rect.visible = not enabled  # PS2 look is the 3PV "game" view only
 	_update_dead_feed_visibility()
 
 
@@ -199,6 +224,20 @@ func _format_telemetry_compact(t: Dictionary) -> String:
 
 
 func _build_ui() -> void:
+	# Post-shader layer below the HUD layer (see _post_layer declaration).
+	_post_layer = CanvasLayer.new()
+	_post_layer.layer = layer - 1
+	add_child(_post_layer)
+
+	_ps2_rect = ColorRect.new()
+	_ps2_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_ps2_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var ps2_mat := ShaderMaterial.new()
+	ps2_mat.shader = load("res://assets/shaders/ps2_post.gdshader")
+	_ps2_rect.material = ps2_mat
+	_ps2_rect.visible = true  # game starts in 3PV
+	_post_layer.add_child(_ps2_rect)
+
 	# Dead-feed layer added first so it draws under the telemetry panels.
 	_feed_black = ColorRect.new()
 	_feed_black.color = Color.BLACK
