@@ -25,6 +25,17 @@ extends Node3D
 ## foliage feels better than an invisible cone wall). Gameplay-only: skipped
 ## in the editor since @tool rebuilds happen outside a running physics world.
 @export var tree_collision: bool = true
+## Beyond this distance, per-chunk forest detail (trunk + species canopy)
+## swaps for a single merged low-poly cone per chunk — full detail on every
+## one of ~20k+ trees out to render distance is wasted GPU work on triangles
+## that don't cover a pixel. See _build_forest().
+@export var forest_lod_near_distance: float = 300.0
+## Crossfade width (both directions) at the near/far LOD switch.
+@export var forest_lod_fade_margin: float = 30.0
+## Trees are bucketed into square chunks so each chunk can carry its own
+## near/far MultiMeshInstance3D pair — visibility_range is a per-node
+## property, so LOD granularity is chunk-sized, not per-tree.
+@export var forest_chunk_size: float = 128.0
 
 const CLASS_FIELD := 0
 const CLASS_FOREST := 1
@@ -250,9 +261,13 @@ func _build_collision() -> void:
 ## Low-poly pine forest on CLASS_FOREST cells, plus deciduous roadside/garden
 ## trees from map.json (positions computed at bake time — road polylines and
 ## residential landuse polygons only exist there; see
-## tools/bake_map.py::collect_roadside_trees/collect_garden_trees). Four
-## MultiMeshes (pine trunk/canopy, deciduous trunk/canopy) instead of
-## Scatter's per-node trees — real coverage here is thousands of trees.
+## tools/bake_map.py::collect_roadside_trees/collect_garden_trees). Trees are
+## bucketed into forest_chunk_size chunks, each getting near-tier MultiMeshes
+## (real trunk + species canopy, visible out to forest_lod_near_distance) and
+## a far-tier MultiMesh (one merged low-poly cone per tree, no trunk, picking
+## up from there) — full per-tree detail at any distance the camera can see
+## is wasted GPU work on sub-pixel triangles. Trunk colliders are built from
+## the complete unchunked transform lists; physics has no LOD.
 func _build_forest() -> void:
 	_free_tree_colliders()
 
@@ -288,16 +303,70 @@ func _build_forest() -> void:
 	deciduous_canopy_mat.roughness = 0.9
 	deciduous_canopy.material = deciduous_canopy_mat
 
+	# Far tier: species/trunks are imperceptible past forest_lod_near_distance,
+	# so one cheap cone shape in a color blended from both canopies stands in
+	# for the whole chunk.
+	var far_cone := CylinderMesh.new()
+	far_cone.top_radius = 0.0
+	far_cone.bottom_radius = 2.0
+	far_cone.height = 5.0
+	far_cone.radial_segments = 5
+	var far_cone_mat := StandardMaterial3D.new()
+	far_cone_mat.albedo_color = (pine_canopy_mat.albedo_color + deciduous_canopy_mat.albedo_color) / 2.0
+	far_cone_mat.roughness = 0.9
+	far_cone.material = far_cone_mat
+
 	var pine_transforms := _scatter_pine_transforms()
 	var deciduous_transforms := _load_deciduous_transforms()
 
-	_add_tree_multimesh("PineTrunks", trunk, 1.5, pine_transforms)
-	_add_tree_multimesh("PineCanopies", pine_canopy, 6.0, pine_transforms)
-	_add_tree_multimesh("DeciduousTrunks", trunk, 1.5, deciduous_transforms)
-	_add_tree_multimesh("DeciduousCanopies", deciduous_canopy, 4.2, deciduous_transforms)
+	var pine_chunks := _chunk_transforms(pine_transforms)
+	var deciduous_chunks := _chunk_transforms(deciduous_transforms)
+	var chunk_keys := {}
+	for key in pine_chunks:
+		chunk_keys[key] = true
+	for key in deciduous_chunks:
+		chunk_keys[key] = true
+
+	var near_end := forest_lod_near_distance
+	var margin := forest_lod_fade_margin
+	for key: Vector2i in chunk_keys:
+		var pine_c: Array[Transform3D] = pine_chunks.get(key, [] as Array[Transform3D])
+		var deciduous_c: Array[Transform3D] = deciduous_chunks.get(key, [] as Array[Transform3D])
+		var tag := "_%d_%d" % [key.x, key.y]
+		# Godot's visibility_range camera-distance check uses the center of
+		# the MultiMeshInstance3D's world-space AABB (computed from the
+		# per-instance transforms), so this anchor isn't load-bearing for
+		# that check — it's set anyway so each chunk's node sits at its
+		# actual location rather than parked at local (0,0,0), which is what
+		# you'd see/select in the editor otherwise.
+		var anchor_x := (key.x + 0.5) * forest_chunk_size
+		var anchor_z := (key.y + 0.5) * forest_chunk_size
+		var anchor := Vector3(anchor_x, get_height(anchor_x, anchor_z), anchor_z)
+
+		_add_tree_multimesh("PineTrunks" + tag, trunk, 1.5, pine_c, anchor, 0.0, near_end, 0.0, margin)
+		_add_tree_multimesh("PineCanopies" + tag, pine_canopy, 6.0, pine_c, anchor, 0.0, near_end, 0.0, margin)
+		_add_tree_multimesh("DeciduousTrunks" + tag, trunk, 1.5, deciduous_c, anchor, 0.0, near_end, 0.0, margin)
+		_add_tree_multimesh("DeciduousCanopies" + tag, deciduous_canopy, 4.2, deciduous_c, anchor,
+			0.0, near_end, 0.0, margin)
+		_add_tree_multimesh("FarCanopies" + tag, far_cone, 4.5, pine_c + deciduous_c, anchor,
+			near_end, 0.0, margin, 0.0)
 
 	if tree_collision and not Engine.is_editor_hint():
 		_build_tree_colliders(pine_transforms + deciduous_transforms)
+
+	print("OsmTerrain forest: %d pine, %d deciduous, %d LOD chunks (~%d m)" % [
+		pine_transforms.size(), deciduous_transforms.size(), chunk_keys.size(),
+		forest_chunk_size])
+
+
+func _chunk_transforms(transforms: Array[Transform3D]) -> Dictionary:
+	var chunks := {}
+	for t in transforms:
+		var key := Vector2i(floori(t.origin.x / forest_chunk_size), floori(t.origin.z / forest_chunk_size))
+		if not chunks.has(key):
+			chunks[key] = [] as Array[Transform3D]
+		chunks[key].append(t)
+	return chunks
 
 
 func _scatter_pine_transforms() -> Array[Transform3D]:
@@ -341,8 +410,16 @@ func _load_deciduous_transforms() -> Array[Transform3D]:
 	return transforms
 
 
+## anchor becomes the MultiMeshInstance3D node's own position (see the
+## comment at the call site for why); per-instance transforms are rebased
+## into anchor-local space so the final world position is unchanged.
+## vis_begin/vis_end (both 0.0 = always visible) are GeometryInstance3D's
+## visibility_range_begin/end — Godot evaluates them against camera distance
+## at render time, no per-frame LOD logic needed here.
 func _add_tree_multimesh(mmi_name: String, mesh: Mesh, y: float,
-		transforms: Array[Transform3D]) -> void:
+		transforms: Array[Transform3D], anchor: Vector3,
+		vis_begin: float = 0.0, vis_end: float = 0.0,
+		vis_begin_margin: float = 0.0, vis_end_margin: float = 0.0) -> void:
 	if transforms.is_empty():
 		return
 	var mm := MultiMesh.new()
@@ -353,10 +430,17 @@ func _add_tree_multimesh(mmi_name: String, mesh: Mesh, y: float,
 		var t: Transform3D = transforms[i]
 		var y_off: float = y * t.basis.get_scale().y
 		mm.set_instance_transform(i,
-			Transform3D(t.basis, t.origin + Vector3(0.0, y_off, 0.0)))
+			Transform3D(t.basis, t.origin - anchor + Vector3(0.0, y_off, 0.0)))
 	var mmi := MultiMeshInstance3D.new()
 	mmi.name = mmi_name
 	mmi.multimesh = mm
+	mmi.position = anchor
+	if vis_begin > 0.0 or vis_end > 0.0:
+		mmi.visibility_range_begin = vis_begin
+		mmi.visibility_range_end = vis_end
+		mmi.visibility_range_begin_margin = vis_begin_margin
+		mmi.visibility_range_end_margin = vis_end_margin
+		mmi.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
 	add_child(mmi)
 
 
