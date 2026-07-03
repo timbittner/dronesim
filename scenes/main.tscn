@@ -9,6 +9,7 @@
 [ext_resource type="Script" uid="uid://chrjy7nmorvjc" path="res://scripts/environment/wind_particles.gd" id="7_wind_particles"]
 [ext_resource type="Script" uid="uid://bw23aurgniyy3" path="res://scripts/environment/flight_recorder.gd" id="8_flight_recorder"]
 [ext_resource type="Script" path="res://scripts/environment/signal_field.gd" id="9_signal_field"]
+[ext_resource type="Script" path="res://scripts/mission/airspace_control.gd" id="10_airspace"]
 
 [sub_resource type="BoxMesh" id="BoxMesh_pad"]
 size = Vector3(2, 0.1, 2)
@@ -72,6 +73,9 @@ script = ExtResource("7_wind_particles")
 
 [node name="SignalField" type="Node3D" parent="."]
 script = ExtResource("9_signal_field")
+
+[node name="AirspaceControl" type="Node" parent="."]
+script = ExtResource("10_airspace")
 
 [node name="FlightRecorder" type="Node" parent="." unique_id=245610671]
 script = ExtResource("8_flight_recorder")

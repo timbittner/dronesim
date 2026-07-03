@@ -28,7 +28,15 @@
     continuing edge heights 2 km outward (edge-smeared albedo, no collision)
     to soften the map-edge silhouette cut. Still visible from altitude —
     follow-up ideas noted in `plans/backlog/terrain-and-world.md`.
-- Phases 4–7 + tests/docs: not started.
+- **Phase 4 — radar ceiling: DONE.** `AirspaceControl` node
+  (`scripts/mission/airspace_control.gd`, group "airspace_control") with
+  **100 m** AGL ceiling (upped from the planned 60 during testing) and 10 s
+  countdown; expiry = single `drone.lose_signal()` call (P6 interceptor
+  hook). Two-line amber banner ("RADAR SIGNATURE DETECTED / DESCEND — 7").
+  HUD's "Altitude" line now shows AGL from `AirspaceControl.agl` (the exact
+  radar value; wind profile is AGL-based too) — the old line duplicated
+  world Y, which is already in the coord readout.
+- Phases 5–7 + tests/docs: not started.
 
 ## Context
 

@@ -45,6 +45,14 @@ var _frozen_frame: ImageTexture = null
 var _pulse_time: float = 0.0
 var _drone_connected: bool = false
 
+# Radar-ceiling warning (P5 Phase 4): pulsing amber banner while the
+# AirspaceControl node (group "airspace_control", lazily resolved) tracks the
+# drone above the radar ceiling. No node in the scene = no banner.
+var _radar_label: Label
+var _radar_pulse: float = 0.0
+var _airspace: Node = null
+var _airspace_searched: bool = false
+
 var _gizmo_panel: ColorRect
 var _gizmo_canvas: Control
 var _coord_label: Label
@@ -95,6 +103,7 @@ func _process(delta: float) -> void:
 		_connect_drone_signals()
 
 	_update_crash_overlay(delta)
+	_update_radar_banner(delta)
 
 	var fpv: bool = _drone.is_fpv_enabled()
 	var intensity: float = clampf(
@@ -170,6 +179,22 @@ func _update_crash_overlay(delta: float) -> void:
 		_update_dead_feed_visibility()
 
 
+func _update_radar_banner(delta: float) -> void:
+	if not _airspace_searched:
+		_airspace_searched = true
+		_airspace = get_tree().get_first_node_in_group("airspace_control")
+	if _airspace == null:
+		return
+	var tracking: bool = _airspace.tracking
+	_radar_label.visible = tracking
+	if tracking:
+		_radar_pulse += delta
+		_radar_label.text = "RADAR SIGNATURE DETECTED\nDESCEND — %d" % ceili(_airspace.seconds_left)
+		_radar_label.modulate.a = 0.6 + 0.4 * sin(_radar_pulse * 6.0)
+	else:
+		_radar_pulse = 0.0
+
+
 func _gather_telemetry() -> Dictionary:
 	var euler: Vector3 = _drone.global_transform.basis.get_euler()
 	var heading_deg: float = rad_to_deg(euler.y)
@@ -201,6 +226,9 @@ func _gather_telemetry() -> Dictionary:
 		"brake_engaged": _drone._brake_engaged,
 		"crashed": _drone.is_crashed(),
 		"signal_pct": _drone.signal_quality * 100.0,
+		# AGL comes from AirspaceControl so it's the exact value the radar
+		# compares — NAN (renders as a dash) when the scene has no radar.
+		"agl": _airspace.agl if _airspace != null else NAN,
 	}
 
 
@@ -226,7 +254,9 @@ func _format_telemetry(t: Dictionary) -> String:
 		+ "Pitch angle : %+6.1f°\n" % t["pitch_deg"]
 		+ "Roll angle  : %+6.1f°\n" % t["roll_deg"]
 		+ "Speed       : %5.1f m/s\n" % t["speed_mps"]
-		+ "Altitude    : %+6.1f m\n" % t["altitude"]
+		# "Altitude" = above ground level (radar ceiling and wind profile both
+		# use it). World Y is already in the bottom-left coord readout.
+		+ ("Altitude    : %6.1f m\n" % t["agl"] if not is_nan(t["agl"]) else "Altitude    :    —\n")
 		+ "Signal      : %5.1f%%\n" % t["signal_pct"]
 	)
 
@@ -277,7 +307,7 @@ func _build_ui() -> void:
 	_bg.color = Color(0.0, 0.0, 0.0, 0.65)
 	_bg.set_anchors_preset(Control.PRESET_TOP_LEFT)
 	_bg.offset_right = 280.0
-	_bg.offset_bottom = 374.0  # fits the telemetry text incl. the signal line
+	_bg.offset_bottom = 374.0  # fits the telemetry text incl. AGL + signal lines
 	_bg.offset_left = 8.0
 	_bg.offset_top = 8.0
 	add_child(_bg)
@@ -357,6 +387,21 @@ func _build_ui() -> void:
 	_signal_lost_label.grow_vertical = Control.GROW_DIRECTION_BOTH
 	_signal_lost_label.visible = false
 	add_child(_signal_lost_label)
+
+	# Radar warning: same styling family as SIGNAL LOST, amber, upper center
+	# so it doesn't collide with the crash banner.
+	_radar_label = Label.new()
+	_radar_label.text = "RADAR SIGNATURE DETECTED — 10s"
+	_radar_label.add_theme_font_size_override("font_size", 28)
+	_radar_label.add_theme_color_override("font_color", Color(1.0, 0.72, 0.1))
+	_radar_label.add_theme_color_override("font_outline_color", Color(0, 0, 0))
+	_radar_label.add_theme_constant_override("outline_size", 5)
+	_radar_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_radar_label.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	_radar_label.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	_radar_label.offset_top = 70.0
+	_radar_label.visible = false
+	add_child(_radar_label)
 
 
 func _on_gizmo_draw() -> void:
