@@ -291,7 +291,7 @@ correct-looking `project.godot` entry, check this first.
 
 ## License
 
-Private project. No license file needed yet.
+MIT (see `LICENSE`, added in P3).
 
 Map data attribution (also embedded in `assets/maps/sebexen/map.json`):
 elevation © LGLN Niedersachsen (DGM1, dl-de/by-2-0); map features
