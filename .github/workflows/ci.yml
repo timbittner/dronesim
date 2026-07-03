@@ -37,18 +37,19 @@ jobs:
       - name: OSM terrain tests
         run: ./godot-bin --headless --path . scenes/test/osm_terrain_test_scene.tscn
 
+      - name: Mission / signal tests
+        run: ./godot-bin --headless --path . scenes/test/mission_test_scene.tscn
+
   # Class reference generated from GDScript ## doc comments → GitHub Pages.
-  # Runs the XML/RST build on every PR too (catches malformed doc comments,
-  # e.g. a bare "[...]" parsed as BBCode) but only deploys on push to main.
+  # docs-build runs the XML/RST/site build on every PR too, to catch malformed
+  # doc comments (e.g. a bare "[...]" parsed as BBCode). It carries NO
+  # environment, so PR branches aren't blocked by the github-pages environment
+  # protection rules (only main may deploy) — that gate previously failed the
+  # whole job in ~2s on PRs, before the parse check ever ran. The artifact is
+  # only produced on push; docs-deploy (push only) publishes it.
   # One-time repo setting required: Settings → Pages → Source: GitHub Actions.
-  docs:
+  docs-build:
     runs-on: ubuntu-latest
-    permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
 
@@ -91,6 +92,18 @@ jobs:
         with:
           path: docs/_build
 
+  # Deploy only on push to main — this is the job that touches the
+  # github-pages environment, so it never runs on PR branches.
+  docs-deploy:
+    needs: docs-build
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
       - id: deployment
-        if: github.event_name == 'push'
         uses: actions/deploy-pages@v4
