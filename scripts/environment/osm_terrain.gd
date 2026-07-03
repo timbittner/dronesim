@@ -19,8 +19,12 @@ extends Node3D
 @export var mesh_step: float = 4.0
 ## Spawn pad flatten radius, matching TerrainGenerator (blend ends +8 m).
 @export var flat_radius: float = 10.0
-@export var tree_density_per_km2: float = 3000.0
+@export var tree_density_per_km2: float = 10000.0
 @export var tree_seed: int = 137
+## Trunk-only physics colliders (canopies stay non-solid — flying through
+## foliage feels better than an invisible cone wall). Gameplay-only: skipped
+## in the editor since @tool rebuilds happen outside a running physics world.
+@export var tree_collision: bool = true
 
 const CLASS_FIELD := 0
 const CLASS_FOREST := 1
@@ -35,6 +39,21 @@ var _cell: float
 var _origin_x: float
 var _origin_z: float
 var _meta: Dictionary
+
+## PhysicsServer3D static bodies carrying trunk colliders, batched
+## TREE_COLLIDER_BATCH shapes per body (thousands of CollisionShape3D nodes
+## would bloat the scene tree; RIDs skip that overhead). Neither extreme
+## works at 20k+ trunks: one body holding every shape measured ~30x slower
+## to build (each body_add_shape call seems to cost more than O(1) — likely
+## a per-add bounds/broadphase rebuild that scales with the body's existing
+## shape count); one body per single shape builds fast but blows past
+## Jolt's default max-bodies limit (10240). Batching keeps both the
+## per-body shape count and the total body count small. _tree_shape is a
+## single CylinderShape3D resource reused (not copied) across every body.
+const TREE_COLLIDER_BATCH := 200
+
+var _tree_bodies: Array[RID] = []
+var _tree_shape: CylinderShape3D
 
 
 func _ready() -> void:
@@ -53,6 +72,10 @@ func _ready() -> void:
 	print("OsmTerrain '%s': %dx%d grid, %d buildings, built in %d ms" % [
 		_meta.get("name", "?"), _w, _h, _meta.get("buildings", []).size(),
 		Time.get_ticks_msec() - t0])
+
+
+func _exit_tree() -> void:
+	_free_tree_colliders()
 
 
 func _load_map() -> void:
@@ -224,42 +247,71 @@ func _build_collision() -> void:
 	body.add_child(col)
 
 
-## Low-poly pine forest on CLASS_FOREST cells: two MultiMeshes (trunks +
-## canopy cones) instead of Scatter's per-node trees — real forest coverage
-## here is ~2 km², thousands of trees.
+## Low-poly pine forest on CLASS_FOREST cells, plus deciduous roadside/garden
+## trees from map.json (positions computed at bake time — road polylines and
+## residential landuse polygons only exist there; see
+## tools/bake_map.py::collect_roadside_trees/collect_garden_trees). Four
+## MultiMeshes (pine trunk/canopy, deciduous trunk/canopy) instead of
+## Scatter's per-node trees — real coverage here is thousands of trees.
 func _build_forest() -> void:
-	var forest_cells := PackedInt32Array()
-	for i in _classes.size():
-		if _classes[i] == CLASS_FOREST:
-			forest_cells.append(i)
-	if forest_cells.is_empty():
-		return
-	var area_km2 := forest_cells.size() * _cell * _cell / 1e6
-	var count := int(area_km2 * tree_density_per_km2)
+	_free_tree_colliders()
 
+	var trunk_mat := StandardMaterial3D.new()
+	trunk_mat.albedo_color = Color(0.35, 0.22, 0.12)
+	trunk_mat.roughness = 0.95
 	var trunk := CylinderMesh.new()
 	trunk.top_radius = 0.15
 	trunk.bottom_radius = 0.25
 	trunk.height = 3.0
 	trunk.radial_segments = 5
-	var trunk_mat := StandardMaterial3D.new()
-	trunk_mat.albedo_color = Color(0.35, 0.22, 0.12)
-	trunk_mat.roughness = 0.95
 	trunk.material = trunk_mat
 
-	var canopy := CylinderMesh.new()
-	canopy.top_radius = 0.0
-	canopy.bottom_radius = 2.2
-	canopy.height = 7.0
-	canopy.radial_segments = 6
-	var canopy_mat := StandardMaterial3D.new()
-	canopy_mat.albedo_color = Color(0.16, 0.30, 0.13)
-	canopy_mat.roughness = 0.9
-	canopy.material = canopy_mat
+	var pine_canopy := CylinderMesh.new()
+	pine_canopy.top_radius = 0.0
+	pine_canopy.bottom_radius = 2.2
+	pine_canopy.height = 7.0
+	pine_canopy.radial_segments = 6
+	var pine_canopy_mat := StandardMaterial3D.new()
+	pine_canopy_mat.albedo_color = Color(0.16, 0.30, 0.13)
+	pine_canopy_mat.roughness = 0.9
+	pine_canopy.material = pine_canopy_mat
 
+	# Sphere canopy reads as the roadside lindens/oaks actually lining these
+	# roads — a cone here would look like an escaped conifer plantation.
+	var deciduous_canopy := SphereMesh.new()
+	deciduous_canopy.radius = 2.4
+	deciduous_canopy.height = 4.8
+	deciduous_canopy.radial_segments = 8
+	deciduous_canopy.rings = 6
+	var deciduous_canopy_mat := StandardMaterial3D.new()
+	deciduous_canopy_mat.albedo_color = Color(0.22, 0.38, 0.14)
+	deciduous_canopy_mat.roughness = 0.9
+	deciduous_canopy.material = deciduous_canopy_mat
+
+	var pine_transforms := _scatter_pine_transforms()
+	var deciduous_transforms := _load_deciduous_transforms()
+
+	_add_tree_multimesh("PineTrunks", trunk, 1.5, pine_transforms)
+	_add_tree_multimesh("PineCanopies", pine_canopy, 6.0, pine_transforms)
+	_add_tree_multimesh("DeciduousTrunks", trunk, 1.5, deciduous_transforms)
+	_add_tree_multimesh("DeciduousCanopies", deciduous_canopy, 4.2, deciduous_transforms)
+
+	if tree_collision and not Engine.is_editor_hint():
+		_build_tree_colliders(pine_transforms + deciduous_transforms)
+
+
+func _scatter_pine_transforms() -> Array[Transform3D]:
+	var forest_cells := PackedInt32Array()
+	for i in _classes.size():
+		if _classes[i] == CLASS_FOREST:
+			forest_cells.append(i)
+	var transforms: Array[Transform3D] = []
+	if forest_cells.is_empty():
+		return transforms
+	var area_km2 := forest_cells.size() * _cell * _cell / 1e6
+	var count := int(area_km2 * tree_density_per_km2)
 	var rng := RandomNumberGenerator.new()
 	rng.seed = tree_seed
-	var transforms: Array[Transform3D] = []
 	for _i in count:
 		var cell_i := forest_cells[rng.randi_range(0, forest_cells.size() - 1)]
 		@warning_ignore("integer_division")
@@ -270,21 +322,77 @@ func _build_forest() -> void:
 		var b := Basis(Vector3.UP, rng.randf_range(0.0, TAU)) \
 			* Basis.from_scale(Vector3(s, s, s))
 		transforms.append(Transform3D(b, Vector3(x, get_height(x, z), z)))
+	return transforms
 
-	for part in [{"mesh": trunk, "y": 1.5}, {"mesh": canopy, "y": 6.0}]:
-		var mm := MultiMesh.new()
-		mm.transform_format = MultiMesh.TRANSFORM_3D
-		mm.mesh = part["mesh"]
-		mm.instance_count = transforms.size()
-		for i in transforms.size():
-			var t: Transform3D = transforms[i]
-			var y_off: float = part["y"] * t.basis.get_scale().y
-			mm.set_instance_transform(i,
+
+## map.json's "trees" entries are [x, z, scale]; rotation is free (not baked)
+## so it's assigned here from tree_seed like the pine scatter.
+func _load_deciduous_transforms() -> Array[Transform3D]:
+	var transforms: Array[Transform3D] = []
+	var rng := RandomNumberGenerator.new()
+	rng.seed = tree_seed + 1
+	for entry in _meta.get("trees", []):
+		var x: float = entry[0]
+		var z: float = entry[1]
+		var s: float = entry[2]
+		var b := Basis(Vector3.UP, rng.randf_range(0.0, TAU)) \
+			* Basis.from_scale(Vector3(s, s, s))
+		transforms.append(Transform3D(b, Vector3(x, get_height(x, z), z)))
+	return transforms
+
+
+func _add_tree_multimesh(mmi_name: String, mesh: Mesh, y: float,
+		transforms: Array[Transform3D]) -> void:
+	if transforms.is_empty():
+		return
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.mesh = mesh
+	mm.instance_count = transforms.size()
+	for i in transforms.size():
+		var t: Transform3D = transforms[i]
+		var y_off: float = y * t.basis.get_scale().y
+		mm.set_instance_transform(i,
+			Transform3D(t.basis, t.origin + Vector3(0.0, y_off, 0.0)))
+	var mmi := MultiMeshInstance3D.new()
+	mmi.name = mmi_name
+	mmi.multimesh = mm
+	add_child(mmi)
+
+
+## One PhysicsServer3D static body carrying every trunk (pine + deciduous) as
+## a cylinder shape instance — thousands of CollisionShape3D nodes would
+## bloat the scene tree, the server API skips that overhead. Canopies stay
+## non-solid (flying through foliage feels better than an invisible cone
+## wall).
+func _build_tree_colliders(transforms: Array[Transform3D]) -> void:
+	_tree_shape = CylinderShape3D.new()
+	_tree_shape.radius = 0.22
+	_tree_shape.height = 3.0
+	var shape_rid := _tree_shape.get_rid()
+	var space := get_world_3d().space
+	var i := 0
+	while i < transforms.size():
+		var batch_end := mini(i + TREE_COLLIDER_BATCH, transforms.size())
+		var body := PhysicsServer3D.body_create()
+		PhysicsServer3D.body_set_space(body, space)
+		PhysicsServer3D.body_set_mode(body, PhysicsServer3D.BODY_MODE_STATIC)
+		PhysicsServer3D.body_set_collision_layer(body, 1)
+		PhysicsServer3D.body_set_collision_mask(body, 1)
+		for j in range(i, batch_end):
+			var t: Transform3D = transforms[j]
+			var y_off: float = 1.5 * t.basis.get_scale().y
+			PhysicsServer3D.body_add_shape(body, shape_rid,
 				Transform3D(t.basis, t.origin + Vector3(0.0, y_off, 0.0)))
-		var mmi := MultiMeshInstance3D.new()
-		mmi.name = "Forest" + ("Trunks" if part["y"] < 2.0 else "Canopies")
-		mmi.multimesh = mm
-		add_child(mmi)
+		_tree_bodies.append(body)
+		i = batch_end
+
+
+func _free_tree_colliders() -> void:
+	for body in _tree_bodies:
+		PhysicsServer3D.free_rid(body)
+	_tree_bodies.clear()
+	_tree_shape = null
 
 
 ## Extrudes all building footprints into one vertex-colored ArrayMesh with a

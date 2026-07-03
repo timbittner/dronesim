@@ -22,12 +22,15 @@ Outputs (assets/maps/sebexen/):
   - classmap.bin   uint8 grid, same dims: 0 field, 1 forest, 2 water, 3 road
   - albedo.png     1 m/px ground color texture (field/forest/water/road,
                    with altitude+slope field tint), for OsmTerrain's mesh UVs
-  - map.json       grid metadata + building footprints in local meters
+  - map.json       grid metadata + building footprints + roadside/garden
+                   deciduous tree positions, in local meters
 
 Local frame (matches Godot): origin = spawn point, x = east, z = south.
 """
 
 import json
+import math
+import random
 import struct
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -68,6 +71,12 @@ WATERWAY_WIDTH = 2.0
 BUILDING_HEIGHT_DEFAULT = 6.0  # no building:levels in this extract
 
 TEX_CELL = 1.0  # meters per albedo.png pixel
+
+ROADSIDE_SPACING = (10.0, 30.0)   # meters, jittered
+ROADSIDE_SETBACK = (1.5, 3.0)     # meters, beyond the road half-width
+GARDEN_TREE_DENSITY = (1000.0, 2000.0)  # m^2 per tree, jittered per polygon
+GARDEN_BUILDING_CLEARANCE = 3.0   # meters
+TREE_SEED = 1337
 
 # Ground palette (0..1 RGB), matched to OsmTerrain's former per-vertex
 # _class_color — now baked once here instead of computed at runtime.
@@ -233,6 +242,131 @@ def collect_buildings(osm: Osm) -> list[dict]:
     return out
 
 
+def point_in_poly(pt: tuple[float, float], poly: list[tuple[float, float]]) -> bool:
+    x, y = pt
+    inside = False
+    n = len(poly)
+    for i in range(n):
+        x1, y1 = poly[i]
+        x2, y2 = poly[(i + 1) % n]
+        if (y1 > y) != (y2 > y):
+            x_cross = (x2 - x1) * (y - y1) / (y2 - y1) + x1
+            if x < x_cross:
+                inside = not inside
+    return inside
+
+
+def dist_point_to_poly(pt: tuple[float, float], poly: list[tuple[float, float]]) -> float:
+    px, py = pt
+    best = math.inf
+    n = len(poly)
+    for i in range(n):
+        ax, ay = poly[i]
+        bx, by = poly[(i + 1) % n]
+        dx, dy = bx - ax, by - ay
+        if dx == 0.0 and dy == 0.0:
+            d = math.hypot(px - ax, py - ay)
+        else:
+            t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)))
+            d = math.hypot(px - (ax + t * dx), py - (ay + t * dy))
+        best = min(best, d)
+    return best
+
+
+def classmap_class_at(classmap: np.ndarray, cell: float, x: float, z: float) -> int:
+    x0, z0 = E_MIN - SPAWN_E, -(N_MAX - SPAWN_N)
+    col = round((x - x0) / cell)
+    row = round((z - z0) / cell)
+    h, w = classmap.shape
+    if 0 <= row < h and 0 <= col < w:
+        return int(classmap[row, col])
+    return -1  # off the map — treated as "reject", never CLASS_FIELD
+
+
+def collect_residential_polys(osm: Osm) -> list[list[tuple[float, float]]]:
+    polys = []
+    for wid, tags in osm.way_tags.items():
+        if tags.get("landuse") != "residential":
+            continue
+        pts = osm.pts(wid)
+        if len(pts) >= 4 and pts[0] == pts[-1]:
+            pts = pts[:-1]
+        if len(pts) >= 3:
+            polys.append(pts)
+    return polys
+
+
+def collect_roadside_trees(osm: Osm, residential: list[list[tuple[float, float]]],
+                            classmap: np.ndarray, rng: random.Random) -> list[list[float]]:
+    """Trees every ~10-30m along road polylines outside village limits, set
+    back beyond the road shoulder — the offline equivalent of a rural avenue
+    of lindens/oaks."""
+    trees = []
+    for wid, tags in osm.way_tags.items():
+        if "highway" not in tags:
+            continue
+        pts = osm.pts(wid)
+        if len(pts) < 2:
+            continue
+        half_w = ROAD_WIDTHS.get(tags["highway"], ROAD_WIDTH_DEFAULT) / 2.0
+        dist_to_next = rng.uniform(*ROADSIDE_SPACING)
+        for i in range(len(pts) - 1):
+            x1, z1 = pts[i]
+            x2, z2 = pts[i + 1]
+            seg_len = math.hypot(x2 - x1, z2 - z1)
+            if seg_len < 1e-6:
+                continue
+            dx, dz = (x2 - x1) / seg_len, (z2 - z1) / seg_len
+            perp_x, perp_z = -dz, dx  # 90 deg, either side chosen per-tree
+            traveled = 0.0
+            while traveled + dist_to_next < seg_len:
+                traveled += dist_to_next
+                tx, tz = x1 + dx * traveled, z1 + dz * traveled
+                side = rng.choice((-1.0, 1.0))
+                off = half_w + rng.uniform(*ROADSIDE_SETBACK)
+                cx, cz = tx + perp_x * off * side, tz + perp_z * off * side
+                if classmap_class_at(classmap, CELL, cx, cz) == CLASS_FIELD and \
+                        not any(point_in_poly((cx, cz), p) for p in residential):
+                    trees.append([round(cx, 2), round(cz, 2), round(rng.uniform(0.8, 1.3), 2)])
+                dist_to_next = rng.uniform(*ROADSIDE_SPACING)
+            dist_to_next -= seg_len - traveled
+    return trees
+
+
+def collect_garden_trees(residential: list[list[tuple[float, float]]], buildings: list[dict],
+                          classmap: np.ndarray, rng: random.Random) -> list[list[float]]:
+    """Sparse random trees inside residential landuse polygons, kept clear of
+    buildings and roads."""
+    trees = []
+    for poly in residential:
+        xs = [p[0] for p in poly]
+        zs = [p[1] for p in poly]
+        area = 0.0
+        n = len(poly)
+        for i in range(n):
+            x1, y1 = poly[i]
+            x2, y2 = poly[(i + 1) % n]
+            area += x1 * y2 - x2 * y1
+        area = abs(area) / 2.0
+        target = int(area / rng.uniform(*GARDEN_TREE_DENSITY))
+        placed = 0
+        attempts = 0
+        while placed < target and attempts < target * 30 + 30:
+            attempts += 1
+            cx = rng.uniform(min(xs), max(xs))
+            cz = rng.uniform(min(zs), max(zs))
+            if not point_in_poly((cx, cz), poly):
+                continue
+            if classmap_class_at(classmap, CELL, cx, cz) != CLASS_FIELD:
+                continue
+            if any(dist_point_to_poly((cx, cz), b["pts"]) < GARDEN_BUILDING_CLEARANCE
+                    for b in buildings):
+                continue
+            trees.append([round(cx, 2), round(cz, 2), round(rng.uniform(0.7, 1.2), 2)])
+            placed += 1
+    return trees
+
+
 def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     mos = load_mosaic()
@@ -244,6 +378,10 @@ def main() -> None:
     classmap_1m = build_classmap(osm, (h1, w1), TEX_CELL)
     albedo = build_albedo(grid, classmap_1m)
     buildings = collect_buildings(osm)
+    residential = collect_residential_polys(osm)
+    tree_rng = random.Random(TREE_SEED)
+    trees = collect_roadside_trees(osm, residential, classmap, tree_rng) \
+        + collect_garden_trees(residential, buildings, classmap, tree_rng)
 
     (OUT / "heightmap.bin").write_bytes(grid.astype("<f4").tobytes())
     (OUT / "classmap.bin").write_bytes(classmap.tobytes())
@@ -260,6 +398,7 @@ def main() -> None:
                 "spawn_e": SPAWN_E, "spawn_n": SPAWN_N},
         "classes": {"0": "field", "1": "forest", "2": "water", "3": "road"},
         "buildings": buildings,
+        "trees": trees,
         "attribution": [
             "Elevation: DGM1 (c) LGLN Niedersachsen 2016, dl-de/by-2-0",
             "Map data (c) OpenStreetMap contributors, ODbL",
@@ -282,8 +421,9 @@ def main() -> None:
     counts = {c: int((classmap == c).sum()) for c in range(4)}
     assert all(counts[c] > 0 for c in range(4)), counts
     assert len(buildings) > 600, len(buildings)
+    assert len(trees) > 0, "roadside/garden tree placement found nothing"
     print(f"grid {w}x{h} cells @ {CELL} m, height {grid.min():.1f}..{grid.max():.1f} m rel. spawn (datum {datum:.1f} m)")
-    print(f"class cells: {counts}  buildings: {len(buildings)}")
+    print(f"class cells: {counts}  buildings: {len(buildings)}  roadside/garden trees: {len(trees)}")
     print(f"wrote {OUT}/heightmap.bin ({grid.nbytes >> 20} MB), classmap.bin, "
           f"albedo.png ({w1}x{h1}), map.json")
 
