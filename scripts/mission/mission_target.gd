@@ -37,7 +37,6 @@ var cleared: bool = false
 var _drone: DroneController = null
 var _crash_connected: bool = false
 var _dwell: float = 0.0
-var _pulse_t: float = 0.0
 var _mesh: MeshInstance3D
 var _mat: StandardMaterial3D
 var _base_color: Color
@@ -89,15 +88,13 @@ func _physics_process(delta: float) -> void:
 	if inside:
 		_dwell += delta
 		# Pulse the volume toward white while the pilot holds inside — a visible
-		# "keep waiting" cue for the dwell timer.
-		_pulse_t += delta
-		var k := 0.5 + 0.5 * sin(_pulse_t * 8.0)
+		# "keep waiting" cue driven off the dwell timer.
+		var k := 0.5 + 0.5 * sin(_dwell * 8.0)
 		_mat.albedo_color = _base_color.lerp(Color(1.0, 1.0, 1.0, 0.55), k)
 		if _dwell >= dwell_time:
 			_mark_cleared()
 	else:
 		_dwell = 0.0
-		_pulse_t = 0.0
 		_mat.albedo_color = _base_color
 
 
@@ -140,7 +137,7 @@ func _rebuild() -> void:
 
 
 func _build_marker() -> void:
-	if _mesh != null and is_instance_valid(_mesh):
+	if is_instance_valid(_mesh):
 		_mesh.queue_free()
 
 	_mat = StandardMaterial3D.new()
