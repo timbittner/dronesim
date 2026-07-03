@@ -33,6 +33,22 @@ var wind_velocity: Vector3 = Vector3.ZERO
 var _wind_field: Node = null
 var _wind_field_searched: bool = false
 
+# --- Signal degradation (P5) ---
+## Radio link quality 0..1 sampled from the SignalField this tick (1 = perfect).
+## Read by the HUD to drive FPV static intensity.
+var signal_quality: float = 1.0
+## Mean control dropouts per second at zero quality; scales linearly with
+## (1 - signal_quality). A dropout holds the last inputs stale (not zeroed,
+## like a real RC link) for a short random window.
+@export var packet_loss_rate: float = 3.0
+## Seconds of sustained zero quality before the link dies (lose_signal()).
+@export var signal_loss_grace: float = 1.5
+
+var _signal_field: Node = null
+var _signal_field_searched: bool = false
+var _dropout_timer: float = 0.0
+var _zero_quality_time: float = 0.0
+
 # --- Crash detection ---
 ## Impact momentum (kg·m/s) above which a direct hit counts as a crash.
 ## 8.0 ≈ a 4 m/s impact at the default mass of 2.0 kg. The free-fall drop from
@@ -116,6 +132,7 @@ var _rotor_positions: Array[Vector3] = [
 
 
 func _ready() -> void:
+	add_to_group("drone")  # resolved by mission targets / tracker (P5)
 	_spawn_transform = global_transform
 	gravity_scale = 1.0
 	angular_damp = 0.0
@@ -255,8 +272,25 @@ func _physics_process(delta: float) -> void:
 	wind_velocity = _sample_wind()
 	apply_central_force(air_drag_coefficient * (wind_velocity - linear_velocity))
 
+	signal_quality = _sample_signal_quality()
+
 	if _state == State.FLYING:
-		_read_inputs()
+		if signal_quality <= 0.01:
+			_zero_quality_time += delta
+			if _zero_quality_time >= signal_loss_grace:
+				lose_signal()
+		else:
+			_zero_quality_time = 0.0
+
+	if _state == State.FLYING:
+		# Packet loss: freeze the current inputs for a short window with a
+		# probability that grows as signal quality drops.
+		if _dropout_timer > 0.0:
+			_dropout_timer -= delta
+		else:
+			_read_inputs()
+			if randf() < (1.0 - signal_quality) * packet_loss_rate * delta:
+				_dropout_timer = randf_range(0.1, 0.4)
 		_compute_and_apply_forces(delta)
 		_apply_angular_damping()
 	# While CRASHED: no inputs, no rotor forces, no damping — gravity and
@@ -296,6 +330,22 @@ func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 
 
 func _crash(momentum: float) -> void:
+	_enter_crashed()
+	print("[Drone] CRASH — signal lost (impact momentum %.1f kg·m/s)" % momentum)
+
+
+## Kill the radio link without an impact: same CRASHED transition as a crash
+## (rotors cut, inputs dead, physics tumbles the airframe — no magic forces).
+## Called on sustained-zero signal quality and by the radar shoot-down (P5);
+## reset() recovers as usual.
+func lose_signal() -> void:
+	if _state == State.CRASHED:
+		return
+	_enter_crashed()
+	print("[Drone] SIGNAL LOST — radio link dead")
+
+
+func _enter_crashed() -> void:
 	_state = State.CRASHED
 	_throttle_input = 0.0
 	_pitch_input = 0.0
@@ -307,7 +357,6 @@ func _crash(momentum: float) -> void:
 	last_mix = [0.0, 0.0, 0.0, 0.0]
 	_set_armed(false)  # motors dead — props stop
 	crash_detected.emit()
-	print("[Drone] CRASH — signal lost (impact momentum %.1f kg·m/s)" % momentum)
 
 
 func _read_inputs() -> void:
@@ -460,6 +509,17 @@ func _sample_wind() -> Vector3:
 	return _wind_field.get_wind(global_position)
 
 
+## Lazily discovers the SignalField (group "signal_field") — same pattern as
+## _sample_wind(). No SignalField in the scene means a perfect link.
+func _sample_signal_quality() -> float:
+	if not _signal_field_searched:
+		_signal_field_searched = true
+		_signal_field = get_tree().get_first_node_in_group("signal_field")
+	if _signal_field == null:
+		return 1.0
+	return _signal_field.get_quality(global_position)
+
+
 func _apply_angular_damping() -> void:
 	var local_ang_vel: Vector3 = global_transform.basis.inverse() * angular_velocity
 	var damp_torque_local: Vector3 = -local_ang_vel * damping_factor
@@ -487,6 +547,9 @@ func reset() -> void:
 	_prev_velocity = Vector3.ZERO
 	global_transform = _spawn_transform
 	_state = State.FLYING
+	signal_quality = 1.0
+	_zero_quality_time = 0.0
+	_dropout_timer = 0.0
 	drone_reset.emit()
 	print("[Drone] Reset to spawn")
 

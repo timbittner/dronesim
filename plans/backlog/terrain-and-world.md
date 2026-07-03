@@ -7,9 +7,12 @@ for a side-branch that doesn't compete with core sim work.
 
 - **Real locations via OpenStreetMap** — swap or supplement the noise-based
   terrain generator with an OSM-based backend for real-world terrain data.
-- **Buildings** — generate/import structures from OSM building footprints,
-  giving crash detection and wind deflection real obstacles beyond
-  procedural trees/rocks.
 
-Open question: how far to go before this needs its own plan doc (data
-fetching/caching, coordinate projection, LOD for large areas).
+- **Better map-edge horizon** (noted during P5) — the `TerrainApron` ring in
+  `osm_terrain.gd` (edge heights continued outward 2 km, edge-smeared albedo,
+  fades into fog) beats the old razor cut against the skybox, but the
+  transition is still visible from altitude. Ideas: bake a wider low-res
+  DGM25/DGM50 "context" heightmap ring around the playable DGM1 area
+  (LGLN has coarser products, same no-key download), or a horizon gradient /
+  matched skybox instead of flat continuation. Reducing render distance is
+  off the table — looking down the whole valley is the point of the map.

@@ -8,6 +8,11 @@
 [ext_resource type="Script" uid="uid://fklrj1ur1tw6" path="res://scripts/environment/wind_field.gd" id="6_wind_field"]
 [ext_resource type="Script" uid="uid://chrjy7nmorvjc" path="res://scripts/environment/wind_particles.gd" id="7_wind_particles"]
 [ext_resource type="Script" uid="uid://bw23aurgniyy3" path="res://scripts/environment/flight_recorder.gd" id="8_flight_recorder"]
+[ext_resource type="Script" uid="uid://c5wxtp6v4wbvo" path="res://scripts/environment/signal_field.gd" id="9_signal_field"]
+[ext_resource type="Script" uid="uid://8vomxnnq4drp" path="res://scripts/mission/airspace_control.gd" id="10_airspace"]
+[ext_resource type="PackedScene" path="res://scenes/mission/mission_target.tscn" id="11_mission_target"]
+[ext_resource type="Script" uid="uid://da74w6dhtkv8i" path="res://scripts/mission/mission_tracker.gd" id="12_mission_tracker"]
+[ext_resource type="PackedScene" path="res://scenes/mission/jamming_node.tscn" id="13_trceg"]
 
 [sub_resource type="BoxMesh" id="BoxMesh_pad"]
 size = Vector3(2, 0.1, 2)
@@ -58,7 +63,7 @@ shadow_enabled = true
 environment = SubResource("Env_sky")
 
 [node name="Drone" parent="." unique_id=608845008 instance=ExtResource("1_drone_scene")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0)
+transform = Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, 0, 1, 0)
 
 [node name="CrashEffects" type="Node3D" parent="." unique_id=1077355102]
 script = ExtResource("5_crash_fx")
@@ -68,6 +73,28 @@ script = ExtResource("6_wind_field")
 
 [node name="WindParticles" type="MultiMeshInstance3D" parent="WindField" unique_id=211529622]
 script = ExtResource("7_wind_particles")
+
+[node name="SignalField" type="Node3D" parent="." unique_id=1908920426]
+script = ExtResource("9_signal_field")
+
+[node name="AirspaceControl" type="Node" parent="." unique_id=1738208436]
+script = ExtResource("10_airspace")
+
+[node name="TargetObserveVillage" parent="." unique_id=667527463 instance=ExtResource("11_mission_target")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -458.67947, -51.697716, 283.14053)
+radius = 25.0
+height = 50.0
+
+[node name="TargetObserveCenter" parent="." unique_id=307638042 instance=ExtResource("11_mission_target")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -269.93, -48.13119, 548.768)
+
+[node name="TargetCrashField" parent="." unique_id=1535772233 instance=ExtResource("11_mission_target")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -655.7908, -63.957844, 701.4366)
+type = 1
+radius = 30.0
+
+[node name="MissionTracker" type="Node" parent="." unique_id=1508678568]
+script = ExtResource("12_mission_tracker")
 
 [node name="FlightRecorder" type="Node" parent="." unique_id=245610671]
 script = ExtResource("8_flight_recorder")
@@ -79,3 +106,6 @@ target_path = NodePath("../Drone")
 
 [node name="DebugHUD" type="CanvasLayer" parent="." unique_id=1958239024]
 script = ExtResource("4_debug_hud")
+
+[node name="JammingNode" parent="." unique_id=1390709013 instance=ExtResource("13_trceg")]
+transform = Transform3D(-0.30869466, 0, -0.9511612, 0, 1, 0, 0.9511612, 0, -0.30869466, -113.956894, -43.68787, 362.43304)

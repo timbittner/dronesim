@@ -15,19 +15,19 @@ run/main_scene="res://scenes/main.tscn"
 config/features=PackedStringArray("4.7", "GL Compatibility")
 config/icon="res://icon.svg"
 
-[filesystem]
-
-; drone_parts.blend is a checked-in reference source (see AGENTS.md); we
-; always work from its manually-exported GLBs, never Godot's live Blender
-; import. Without this, CI (no Blender binary) fails to import the .blend
-; file and aborts the whole reimport batch, silently leaving the sibling
-; GLBs unimported too — which breaks every preload() of them.
-import/blender/enabled=false
-
 [display]
 
 window/stretch/mode="canvas_items"
 window/stretch/aspect="expand"
+
+[filesystem]
+
+; drone_parts.blend / jammer.blend are checked-in reference sources (see
+; AGENTS.md); we always work from their manually-exported GLBs, never Godot's
+; live Blender import. Without this, CI (no Blender binary) fails to import the
+; .blend files and aborts the whole reimport batch, silently leaving the
+; sibling GLBs unimported too — which breaks every preload() of them.
+import/blender/enabled=false
 
 [input]
 

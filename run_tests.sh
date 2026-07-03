@@ -29,4 +29,7 @@ echo "=== Flight recorder test suite ==="
 echo "=== OSM terrain test suite ==="
 "$GODOT_BIN" --headless --path "$SCRIPT_DIR" scenes/test/osm_terrain_test_scene.tscn || status=1
 
+echo "=== Mission / signal test suite ==="
+"$GODOT_BIN" --headless --path "$SCRIPT_DIR" scenes/test/mission_test_scene.tscn || status=1
+
 exit $status

@@ -9,6 +9,7 @@
   from [swarm-mechanics.md](swarm-mechanics.md) — both are just features to
   collect, not alternatives.
 - **Battery/energy model** — finite flight time, RTH-on-low-battery.
+  Deferred out of P5 to P6.
 - **Replay scrubbing** — in-sim playback of the telemetry recorded by
   `FlightRecorder` (P3 Phase D ships logging only). Sketch: freeze the
   RigidBody3D (`FREEZE_MODE_STATIC`, via `set_deferred`), scrub a playhead
