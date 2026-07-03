@@ -64,6 +64,14 @@ var _wind_label: Label
 ## cached instead of renormalized every frame.
 var _wind_arrow_dir: Vector2 = Vector2.RIGHT
 
+# Compass tape (P5 Phase 5): PUBG-style heading strip, bottom center. Draws the
+# camera's heading (north = −Z, the map's UTM north) with 5° ticks, degree
+# numbers every 15°, cardinal letters every 45°, and bearing dots for any
+# mission targets (group "mission_targets"). Dims with the rest of the HUD on
+# crash. See _on_compass_draw for the cylinder projection.
+var _compass_panel: ColorRect
+var _compass_canvas: Control
+
 var _gizmo_font: Font
 var _gizmo_font_size: int = 14
 
@@ -130,6 +138,7 @@ func _process(delta: float) -> void:
 
 	_gizmo_canvas.queue_redraw()
 	_wind_canvas.queue_redraw()
+	_compass_canvas.queue_redraw()
 
 	_frame_count += 1
 	if _frame_count >= print_interval:
@@ -149,6 +158,7 @@ func _on_crash_detected() -> void:
 	_signal_lost_label.visible = true
 	_label.modulate.a = 0.35
 	_wind_panel.modulate.a = 0.35
+	_compass_panel.modulate.a = 0.35
 	_update_dead_feed_visibility()
 
 
@@ -176,6 +186,7 @@ func _update_crash_overlay(delta: float) -> void:
 		_feed_frozen.texture = null
 		_label.modulate.a = 1.0
 		_wind_panel.modulate.a = 1.0
+		_compass_panel.modulate.a = 1.0
 		_update_dead_feed_visibility()
 
 
@@ -375,6 +386,25 @@ func _build_ui() -> void:
 	_wind_label.text = "WIND CALM"
 	_wind_panel.add_child(_wind_label)
 
+	# Compass tape, bottom center — clear of the top-center radar / signal-lost
+	# banners. Semi-transparent strip; the canvas draws the ticks and labels.
+	_compass_panel = ColorRect.new()
+	_compass_panel.color = Color(0.0, 0.0, 0.0, 0.5)
+	_compass_panel.clip_contents = true  # keep edge labels inside the strip
+	_compass_panel.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	_compass_panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	_compass_panel.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	_compass_panel.offset_left = -230.0
+	_compass_panel.offset_right = 230.0
+	_compass_panel.offset_top = -40.0
+	_compass_panel.offset_bottom = -14.0
+	add_child(_compass_panel)
+
+	_compass_canvas = Control.new()
+	_compass_canvas.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_compass_canvas.draw.connect(_on_compass_draw)
+	_compass_panel.add_child(_compass_canvas)
+
 	_signal_lost_label = Label.new()
 	_signal_lost_label.text = "SIGNAL LOST"
 	_signal_lost_label.add_theme_font_size_override("font_size", 48)
@@ -505,3 +535,88 @@ func _on_wind_draw() -> void:
 	for seg in segments:
 		_wind_canvas.draw_line(seg[0], seg[1], color, 6.0, false)
 	_wind_canvas.draw_circle(tip, 3.0, color)
+
+
+const _CARDINALS := ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+## Degrees visible from center to each edge of the tape.
+const COMPASS_HALF_FOV: float = 75.0
+const COMPASS_FONT_SIZE: int = 11
+
+
+## PUBG-style compass tape. Heading is the camera's forward bearing projected
+## onto the ground plane: 0° = north = −Z (the map's UTM north), increasing
+## clockwise through east (+X). Marks are placed with a cylinder projection
+## (x ∝ sin(angle-from-center)) so the tape reads like the rim of a rotating
+## ring — compressed and fading toward the edges — rather than a flat strip.
+## Mission targets show as bearing dots, pinned to the nearest edge when their
+## bearing is off-tape (green once cleared).
+func _on_compass_draw() -> void:
+	var cam := get_viewport().get_camera_3d()
+	if not cam or not is_instance_valid(cam):
+		return
+
+	var size := _compass_canvas.get_size()
+	var mid_x := size.x * 0.5
+	var tick_bottom := size.y - 2.0
+	var label_y := float(COMPASS_FONT_SIZE)
+	# Radius that maps the edge FOV exactly to the panel edge.
+	var radius := mid_x / sin(deg_to_rad(COMPASS_HALF_FOV))
+
+	var fwd := -cam.global_transform.basis.z
+	var heading := fposmod(rad_to_deg(atan2(fwd.x, -fwd.z)), 360.0)
+
+	# Ticks + labels: walk the 5° marks in the visible window, each placed by its
+	# signed angular distance from the heading, fading out toward the edges.
+	var first := int(floor((heading - COMPASS_HALF_FOV) / 5.0)) * 5
+	var last := int(ceil((heading + COMPASS_HALF_FOV) / 5.0)) * 5
+	for d in range(first, last + 1, 5):
+		var delta := _wrap180(float(d) - heading)
+		if absf(delta) > COMPASS_HALF_FOV:
+			continue
+		var x := mid_x + sin(deg_to_rad(delta)) * radius
+		var fade := smoothstep(COMPASS_HALF_FOV, COMPASS_HALF_FOV - 25.0, absf(delta))
+		var nb := int(fposmod(float(d), 360.0))
+		if nb % 45 == 0:
+			_compass_canvas.draw_line(Vector2(x, tick_bottom), Vector2(x, tick_bottom - 9.0),
+				Color(0.35, 1.0, 0.35, fade), 2.0)
+			_draw_centered(_CARDINALS[roundi(nb / 45.0)], Vector2(x, label_y),
+				Color(0.35, 1.0, 0.35, fade))
+		elif nb % 15 == 0:
+			_compass_canvas.draw_line(Vector2(x, tick_bottom), Vector2(x, tick_bottom - 7.0),
+				Color(0.35, 1.0, 0.35, fade), 1.5)
+			_draw_centered("%d" % nb, Vector2(x, label_y), Color(0.35, 1.0, 0.35, fade * 0.7))
+		else:
+			_compass_canvas.draw_line(Vector2(x, tick_bottom), Vector2(x, tick_bottom - 4.0),
+				Color(0.35, 1.0, 0.35, fade * 0.5), 1.0)
+
+	# Mission-target bearing dots (group is empty until Phase 6 — safe no-op).
+	if _drone != null:
+		var origin := _drone.global_position
+		var dot_y := size.y * 0.5
+		for t in get_tree().get_nodes_in_group("mission_targets"):
+			if not is_instance_valid(t):
+				continue
+			var to: Vector3 = (t as Node3D).global_position - origin
+			var bearing := fposmod(rad_to_deg(atan2(to.x, -to.z)), 360.0)
+			# Clamp to the FOV so an off-tape target sticks to the nearest edge
+			# instead of vanishing.
+			var tdelta := clampf(_wrap180(bearing - heading), -COMPASS_HALF_FOV, COMPASS_HALF_FOV)
+			var tx := mid_x + sin(deg_to_rad(tdelta)) * radius
+			# ponytail: cleared→green, else amber; per-type colors when Phase 6
+			# gives targets a type enum.
+			var cleared: bool = ("cleared" in t) and t.cleared
+			var dot := Color(0.3, 1.0, 0.3) if cleared else Color(1.0, 0.72, 0.1)
+			_compass_canvas.draw_circle(Vector2(tx, dot_y), 3.0, dot)
+
+
+func _wrap180(deg: float) -> float:
+	return fposmod(deg + 180.0, 360.0) - 180.0
+
+
+## Draws text horizontally centered on pos.x, with its baseline near pos.y.
+func _draw_centered(text: String, pos: Vector2, color: Color) -> void:
+	var w := _gizmo_font.get_string_size(
+		text, HORIZONTAL_ALIGNMENT_LEFT, -1, COMPASS_FONT_SIZE).x
+	_compass_canvas.draw_string(
+		_gizmo_font, Vector2(pos.x - w * 0.5, pos.y), text,
+		HORIZONTAL_ALIGNMENT_LEFT, -1, COMPASS_FONT_SIZE, color)
