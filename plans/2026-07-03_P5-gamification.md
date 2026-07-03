@@ -36,7 +36,33 @@
   HUD's "Altitude" line now shows AGL from `AirspaceControl.agl` (the exact
   radar value; wind profile is AGL-based too) — the old line duplicated
   world Y, which is already in the coord readout.
-- Phases 5–7 + tests/docs: not started.
+- **Phase 5 — compass tape: DONE.** `DebugHUD._on_compass_draw`, **bottom
+  center** (Tim's call — less cramped, clears the top banners). Cylinder
+  projection (`x ∝ sin`) so it reads like a rotating ring, marks fading at the
+  edges; 5° ticks, degree numbers /15°, cardinals /45°; north = −Z. Mission
+  dots amber→green, clamped sticky to the tape edge when off-bearing. **Drone
+  spawn rotated to face south** (toward the objectives).
+- **Phase 6 — mission targets + tracker: DONE.** Editor-placeable
+  `MissionTarget` (one `@tool` scene, OBSERVE/CRASH type in the inspector) —
+  renders + ground-snaps as you drag, so placement is X/Z only (Y discarded,
+  volume is ground-anchored). OBSERVE cylinder pulses white while dwelling;
+  CRASH is a low red drum (stands off sloped terrain). `MissionTracker` fires
+  `mission_completed` → green banner above the compass. Drone joins group
+  `"drone"` for path-free resolution.
+- **Phase 7 — jamming node: DONE.** `JammingNode` (group "jammers", exports
+  `strength`+`radius` — SignalField already reads them, no change). `@tool`
+  GLB + ground-snap. Mesh authored in Blender via MCP as a **standalone
+  `jammer.blend`** (its own scene via `libraries.write`, drone_parts untouched)
+  → `jammer.glb`: low-poly olive EW truck. Also restored the CI-critical
+  `import/blender/enabled` comment the editor had stripped.
+- **Phase 8 — tests + docs: DONE.** `mission_test.gd` (+ scene, wired into
+  `run_tests.sh`): boundary belt ramp, jammer falloff, `lose_signal()`→CRASHED,
+  tracker-completes-once — 4 pure/lean tests, all green (36 total). AGENTS.md +
+  PROJECT_SUMMARY.md P5 sections; doc comments bracket-clean for the docs CI.
+
+**P5 COMPLETE.** Deferred to P6 as agreed: visible interceptor, DPad menu,
+quest HUD, battery, cheats, payload-drop target type. The AGENTS.md→
+PROJECT_SUMMARY.md changelog-compaction chore (see below) also still pending.
 
 ## Context
 

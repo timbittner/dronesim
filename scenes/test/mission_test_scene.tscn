@@ -1,0 +1,10 @@
+[gd_scene format=3]
+
+[ext_resource type="PackedScene" uid="uid://5jri1ism1wee" path="res://scenes/drone/drone.tscn" id="1_drone_scene"]
+[ext_resource type="Script" path="res://scripts/test/mission_test.gd" id="2_test_script"]
+
+[node name="MissionTest" type="Node3D"]
+script = ExtResource("2_test_script")
+
+[node name="Drone" parent="." instance=ExtResource("1_drone_scene")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0)

@@ -19,7 +19,13 @@ Saxony), baked offline from LGLN DGM1 elevation + OSM data by
 `OsmTerrain` (heightmap mesh + collision + baked albedo texture,
 road/water/forest classes, a chunked/LOD'd forest of pine + roadside/garden
 deciduous trees with trunk colliders, extruded buildings with gable/flat
-roofs).
+roofs). **P5 gamification**: an analog-FPV look and objectives — a PS2-era
+post shader that doubles as the signal-static shader for both views, a unified
+`SignalField` signal-quality scalar (map-boundary belt + jammers) driving FPV
+static, control packet loss and sustained-zero signal loss, an
+`AirspaceControl` radar ceiling (shoot-down stub via `lose_signal()`), a
+PUBG-style compass tape, editor-placeable `MissionTarget`s (observe/crash) with
+a `MissionTracker`, and a Blender-authored `JammingNode` EW truck.
 See `PROJECT_SUMMARY.md` for detailed architecture and tuning parameters.
 
 ## Tech Stack
@@ -32,7 +38,8 @@ See `PROJECT_SUMMARY.md` for detailed architecture and tuning parameters.
 - **Godot MCP:** `@coding-solo/godot-mcp` available for editor automation
   (run/stop scenes, read debug output — use it to syntax-check GDScript)
 - **Blender MCP:** available in this workspace for driving Blender directly
-  (inspect/edit `drone_parts.blend`, re-export GLBs) when connected
+  (inspect/edit `drone_parts.blend` / `jammer.blend`, re-export GLBs) when
+  connected
 
 ## Architecture
 
@@ -42,11 +49,15 @@ scenes/
   drone/drone.tscn        Drone instance
   environment/terrain.tscn      Procedural terrain (retired from main, P4)
   environment/osm_terrain.tscn  Real-world Sebexen map (in main since P4)
+  mission/                Editor-placeable objectives / props (P5)
+    mission_target.tscn
+    jamming_node.tscn
   test/                   Headless test scenes
     flight_mode_test_scene.tscn
     wind_test_scene.tscn
     flight_recorder_test_scene.tscn
     osm_terrain_test_scene.tscn
+    mission_test_scene.tscn
 scripts/
   drone/
     drone_controller.gd          Core controller — input, mixer, damping,
@@ -70,14 +81,25 @@ scripts/
     wind_particles.gd            Advected wind-streak MultiMesh (child of WindField)
     flight_recorder.gd           JSONL telemetry per physics tick (P3) —
                                  user://telemetry/, rotates on drone_reset
+    signal_field.gd              Signal-quality field: boundary belt + jammers,
+                                 fog wall (group "signal_field", P5)
+  mission/
+    airspace_control.gd          Radar ceiling / shoot-down stub (P5)
+    mission_target.gd            MissionTarget observe/crash, @tool (P5)
+    mission_tracker.gd           Fires mission_completed when all cleared (P5)
+    jamming_node.gd              JammingNode EW truck, group "jammers" (P5)
   ui/
-    debug_hud.gd                 Telemetry overlay + wind arrow
+    debug_hud.gd                 Telemetry + wind arrow + compass tape + radar/
+                                 mission banners + PS2/static post shader (P5)
   test/
     flight_mode_test.gd          15 headless tests
     wind_field_test.gd           6 headless wind-field tests
     flight_recorder_test.gd      3 headless telemetry tests
     osm_terrain_test.gd          8 headless map/terrain tests (P4)
+    mission_test.gd              4 headless mission/signal tests (P5)
     mock_hill_terrain.gd         Deterministic terrain stand-in for wind tests
+assets/shaders/
+    ps2_post.gdshader            PS2 look + analog signal static, both views (P5)
 tools/
   bake_map.py                    Offline DGM1+OSM → baked map assets (P4);
                                  inputs in tools/map_sources/ (gitignored)
@@ -92,6 +114,8 @@ assets/
     arm.glb                      Exported single arm mesh (Mat_arm)
     propeller.glb                Front prop (Mat_prop_front, cyan) + back prop
                                  (Mat_prop_back, pink) for orientation
+    jammer.blend                 Source: EW/jammer truck (P5, standalone)
+    jammer.glb                   Exported jammer mesh (JammingNode visual)
   textures/
 ```
 
@@ -314,9 +338,13 @@ The `_rotor_positions` array order is `[FL, FR, BL, BR]` and the mixer output
 - Godot editor must be open when using MCP tools (auto-import on file changes)
 - GDScript files can be edited externally; Godot reloads on focus
 - Scene files (.tscn) should be edited in the Godot editor unless making targeted text edits
-- **Run tests:** `./run_tests.sh` (all four headless suites; new
+- **Run tests:** `./run_tests.sh` (all five headless suites; new
   `class_name`s need a `godot --headless --path . --import` first if the
   editor isn't open to refresh the global class cache)
+- **Re-export the jammer mesh** (only when editing `jammer.blend`): open it in
+  Blender, then via the Blender MCP flush to Object Mode and
+  `export_scene.gltf(use_selection=True)` to `assets/models/jammer.glb`;
+  Godot only reimports a changed `.glb` on editor focus or `--import`
 - **Re-bake the map** (only when map data/extent/spawn changes):
   `.venv/bin/python tools/bake_map.py` — see the script header for venv
   setup and DGM1 tile downloads
