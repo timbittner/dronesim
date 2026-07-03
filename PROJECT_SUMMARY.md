@@ -15,9 +15,11 @@ project health** adds GitHub upstream (README, MIT, CI), JSONL flight
 telemetry, an itch.io web export, and a generated GitHub Pages class
 reference. **P4 real-world terrain** replaces the procedural map with the
 Sebexen valley (Lower Saxony), baked offline from LGLN DGM1 elevation data
-and an OSM extract: heightmap terrain, road/water/forest surface classes, a
-MultiMesh pine forest, and 628 extruded building footprints.
-15 + 6 + 3 + 6 headless tests pass.
+and an OSM extract: heightmap terrain with a baked albedo texture,
+road/water/forest surface classes, a chunked/LOD'd MultiMesh forest (pine +
+roadside/garden deciduous, ~20k trees, trunk colliders), and 628 extruded
+building footprints with gable or flat roofs.
+15 + 6 + 3 + 8 headless tests pass.
 
 ---
 
@@ -26,8 +28,10 @@ MultiMesh pine forest, and 628 extruded building footprints.
 ```
 Main (Node3D)
 ├── Terrain (Node3D)               # OsmTerrain — real-world Sebexen map (P4)
-│   └── [TerrainMesh, TerrainBody, ForestTrunks, ForestCanopies,
-│        Buildings, BuildingsBody]  (built at runtime from baked assets)
+│   └── [TerrainMesh, TerrainBody, per-chunk Pine/Deciduous Trunks/Canopies +
+│        FarCanopies MultiMeshInstance3Ds, Buildings, BuildingsBody]
+│        (built at runtime from baked assets; tree trunk colliders are
+│        PhysicsServer3D bodies, not scene nodes)
 ├── SpawnPad (MeshInstance3D)
 ├── DirectionalLight3D
 ├── WorldEnvironment
@@ -364,10 +368,16 @@ header) plus an **OSM extract** into `assets/maps/sebexen/`:
 - `map.json` — grid metadata, UTM anchors, 628 building footprints (local
   meters + height), and the LGLN/OSM attribution strings.
 
-Local frame: origin = spawn (a flat field at UTM 571000 E, 5741650 N between
+Local frame: origin = spawn (a flat field at UTM 570730 E, 5742050 N between
 the village and the forest to the north), x = east, z = south. lat/lon →
 UTM32 uses pyproj — an equirectangular approximation would misalign OSM
 features against the DEM by ~20 m at map edges (UTM grid convergence ≈0.8°).
+Also computes `albedo.png` (1 m/px ground color texture: field/forest/water/
+road palette with altitude+slope field tint, Gaussian-blurred to soften hard
+class edges) and bakes roadside + garden tree positions by walking OSM road
+polylines and scattering points inside `landuse=residential` polygons — both
+need the OSM way geometry, which only exists at bake time. See
+[`docs/new-map.md`](../docs/new-map.md) for baking a different area.
 
 ### `scripts/environment/osm_terrain.gd` — Runtime (`OsmTerrain`)
 
@@ -376,21 +386,39 @@ Node named `Terrain` in `main.tscn` (swapped in for the procedural
 `get_height(x, z)` (bilinear, edge-clamped) keeps `WindField` working
 unchanged. Builds on `_ready()` (~2 s, not `@tool`):
 
-- **Terrain mesh**: one vertex-colored ArrayMesh at `mesh_step` (4 m default)
-  with analytic normals; per-vertex land class is max-pooled over the covered
-  cells so 2-cell-wide roads don't alias into dashes on the coarser lattice.
-  Water vertices are dropped 0.4 m for a visible channel.
+- **Terrain mesh**: one ArrayMesh at `mesh_step` (4 m default) with analytic
+  normals, UV-mapped to `albedo.png` (loaded via `load()`, so it goes through
+  Godot's normal texture-import pipeline, unlike the raw `.bin` grids). Water
+  vertices are dropped 0.4 m for a visible channel; ground color/blur lives
+  in the bake (`build_albedo`), not per-vertex at runtime.
 - **Collision**: `HeightMapShape3D` fed the full-res grid directly
   (same pattern as TerrainGenerator), XZ-recentered on the map rect.
 - **Spawn pad**: the grid itself is flattened radially around the origin at
   load (same smoothstep profile as TerrainGenerator), so mesh, collision and
   `get_height` agree by construction.
-- **Forest**: two MultiMeshes (trunks + canopy cones) sampled onto forest
-  cells, `tree_density_per_km2 = 3000` (~6 k trees) — Scatter's per-node
-  trees can't cover ~2 km² of real forest.
-- **Buildings**: all footprints extruded (walls + flat roof, winding
-  normalized via shoelace area) into one ArrayMesh + one trimesh
-  StaticBody3D. Default height 6 m (extract has no `building:levels`).
+- **Forest**: pine trees scattered onto forest-class cells
+  (`tree_density_per_km2 = 10000`, ~20 k trees) plus baked-in deciduous
+  roadside/garden trees from `map.json` (`trees: [[x, z, scale], ...]`).
+  Trunk + canopy per species (pine = cylinder trunk + cone canopy, deciduous
+  = cylinder trunk + sphere canopy), batched into ~128 m
+  (`forest_chunk_size`) chunks, each with a near-tier MultiMesh pair (full
+  detail) and a far-tier single merged-cone MultiMesh, switched via
+  `GeometryInstance3D.visibility_range_begin/end` (`forest_lod_near_distance
+  = 300`, `forest_lod_fade_margin = 30`) — chunking exists because
+  `visibility_range` is a per-node property, so LOD granularity is
+  chunk-sized, not per-instance. Trunk colliders (`tree_collision = true`,
+  on by default) are cylinders added directly via `PhysicsServer3D`
+  (`body_add_shape`, batched 200 shapes/body — one shape per call scales
+  worse than O(1) as a body's shape count grows, and one body per shape hits
+  Jolt's default 10240-body cap) — no `CollisionShape3D` nodes, which would
+  bloat the scene tree at this count. Canopies stay non-solid. Colliders are
+  skipped in the editor (`Engine.is_editor_hint()`).
+- **Buildings**: all footprints extruded into one ArrayMesh + one trimesh
+  StaticBody3D, winding normalized via shoelace area so backface culling
+  stays on (no `cull_mode` override). Default height 6 m (extract has no
+  `building:levels`). 4-corner footprints under 250 m² get a gable roof
+  (ridge along the shorter pair of edges, rise ∝ eave span, clamped
+  1.5–3 m); larger/irregular footprints keep a flat roof.
 
 `export_presets.cfg` has `include_filter="assets/maps/*"` — the baked files
 are not Godot resources and would otherwise be dropped from the web export.
@@ -405,6 +433,8 @@ are not Godot resources and would otherwise be dropped from the web export.
 | All land classes present | field/forest/water/road all seen in classmap |
 | Collision matches get_height | physics raycasts hit within 0.5 m of `get_height` at 5 spots |
 | Buildings built with collision | building mesh AABB/vert count sane, trimesh body exists |
+| Albedo texture loads | `albedo.png` loads and its dims match the 1 m/px bake of the grid extent |
+| map.json has trees | roadside/garden tree array is non-empty |
 
 Run: `godot --headless --path . scenes/test/osm_terrain_test_scene.tscn`
 

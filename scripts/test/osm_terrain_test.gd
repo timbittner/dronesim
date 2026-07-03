@@ -30,6 +30,8 @@ func _run_all_tests() -> void:
 	await _run_test("test_all_land_classes_present")
 	await _run_test("test_collision_matches_get_height")
 	await _run_test("test_buildings_built_with_collision")
+	await _run_test("test_albedo_texture_loads")
+	await _run_test("test_map_json_has_trees")
 
 	var total := _passed + _failed
 	print("[TEST] ========================================")
@@ -134,3 +136,27 @@ func test_buildings_built_with_collision() -> bool:
 	var tri_count: int = mesh_node.mesh.surface_get_array_len(0)
 	print("[TEST] buildings AABB size=", aabb.size, " verts=", tri_count)
 	return body != null and tri_count > 10000 and aabb.size.y > 5.0
+
+
+func test_albedo_texture_loads() -> bool:
+	print("[TEST] --- test_albedo_texture_loads ---")
+	var tex := load(_terrain.map_dir + "/albedo.png") as Texture2D
+	if tex == null:
+		print("[TEST] albedo.png failed to load")
+		return false
+	# bake_map.py rasterizes albedo at 1 m/px (TEX_CELL), vs. the 2 m
+	# heightmap grid, so its dims are the same world span at half the cell size.
+	var expected_w := int(_terrain._w - 1) * int(_terrain._cell) + 1
+	var expected_h := int(_terrain._h - 1) * int(_terrain._cell) + 1
+	print("[TEST] albedo dims ", tex.get_width(), "x", tex.get_height(),
+		" expected ", expected_w, "x", expected_h)
+	return tex.get_width() == expected_w and tex.get_height() == expected_h
+
+
+func test_map_json_has_trees() -> bool:
+	print("[TEST] --- test_map_json_has_trees ---")
+	var meta: Dictionary = JSON.parse_string(
+		FileAccess.get_file_as_string(_terrain.map_dir + "/map.json"))
+	var trees: Array = meta.get("trees", [])
+	print("[TEST] trees in map.json: ", trees.size())
+	return trees.size() > 0

@@ -16,8 +16,10 @@ fails on malformed doc comments (bare `[...]` parses as BBCode). **P4
 real-world terrain**: `main.tscn` now flies over the Sebexen valley (Lower
 Saxony), baked offline from LGLN DGM1 elevation + OSM data by
 `tools/bake_map.py` into `assets/maps/sebexen/` and loaded at runtime by
-`OsmTerrain` (heightmap mesh + collision, road/water/forest classes,
-MultiMesh pine forest, extruded buildings).
+`OsmTerrain` (heightmap mesh + collision + baked albedo texture,
+road/water/forest classes, a chunked/LOD'd forest of pine + roadside/garden
+deciduous trees with trunk colliders, extruded buildings with gable/flat
+roofs).
 See `PROJECT_SUMMARY.md` for detailed architecture and tuning parameters.
 
 ## Tech Stack
@@ -74,7 +76,7 @@ scripts/
     flight_mode_test.gd          15 headless tests
     wind_field_test.gd           6 headless wind-field tests
     flight_recorder_test.gd      3 headless telemetry tests
-    osm_terrain_test.gd          6 headless map/terrain tests (P4)
+    osm_terrain_test.gd          8 headless map/terrain tests (P4)
     mock_hill_terrain.gd         Deterministic terrain stand-in for wind tests
 tools/
   bake_map.py                    Offline DGM1+OSM → baked map assets (P4);
@@ -194,17 +196,42 @@ speed and an `m/s` readout, dimming on crash like the rest of the telemetry.
 (`scripts/environment/osm_terrain.gd`), which loads baked assets from
 `assets/maps/sebexen/` — a float32 heightmap grid (2 m cells, 3.4 × 2.4 km of
 the Sebexen valley from LGLN DGM1 lidar), a uint8 land-class grid
-(field/forest/water/road rasterized from OSM), and building footprints in
-`map.json`. The local frame's origin is the spawn point (a flat field NE of
-the village); the pad flatten is applied to the loaded grid itself so mesh,
-collision (`HeightMapShape3D`, full-res) and `get_height()` agree by
-construction. `get_height(x, z)` keeps the same duck-typed contract as
-`TerrainGenerator`, so `WindField` shapes wind around the real ridges with no
-changes. The bake is offline and one-time: `tools/bake_map.py` (see its
-header for the venv setup and the no-API-key DGM1 tile download); raw inputs
-live in `tools/map_sources/` (gitignored), baked outputs are checked in.
+(field/forest/water/road rasterized from OSM), a 1 m/px `albedo.png` ground
+color texture (field/forest/water/road palette with altitude+slope field
+tint, baked — the terrain mesh is UV-mapped to it, no per-vertex class
+colors at runtime), building footprints, and roadside/garden deciduous tree
+positions, all in `map.json`. The local frame's origin is the spawn point (a
+flat field NE of the village); the pad flatten is applied to the loaded grid
+itself so mesh, collision (`HeightMapShape3D`, full-res) and `get_height()`
+agree by construction. `get_height(x, z)` keeps the same duck-typed contract
+as `TerrainGenerator`, so `WindField` shapes wind around the real ridges with
+no changes. The bake is offline and one-time: `tools/bake_map.py` (see its
+header for the venv setup and the no-API-key DGM1 tile download; see
+`docs/new-map.md` for adapting it to a new area); raw inputs live in
+`tools/map_sources/` (gitignored), baked outputs are checked in.
 `export_presets.cfg` needs `include_filter="assets/maps/*"` because `.bin`/
-`.json` are not Godot resources — without it the web export ships no map.
+`.json`/`.png` are not Godot resources — without it the web export ships no
+map.
+
+Buildings get a gable roof (ridge along the shorter edge pair) when their
+footprint is a 4-corner polygon under 250 m²; larger/irregular footprints
+keep a flat roof. Winding is normalized via shoelace area so backface
+culling stays on — no `cull_mode` override.
+
+The forest is pine (scattered onto forest-class cells,
+`tree_density_per_km2 = 10000`, ~20k trees) plus baked-in deciduous
+roadside/garden trees from `map.json`. Trees are chunked into
+`forest_chunk_size` (128 m) squares, each with a near-tier MultiMesh pair
+(full trunk+canopy) and a far-tier merged-cone MultiMesh switched via
+`GeometryInstance3D.visibility_range_begin/end`
+(`forest_lod_near_distance = 300`, `forest_lod_fade_margin = 30`) — LOD
+granularity is chunk-sized because `visibility_range` is a per-node
+property. Trunk colliders (`tree_collision = true`) are cylinders added
+directly via `PhysicsServer3D.body_add_shape`, batched 200 shapes/body (one
+shape per `body_add_shape` call scales worse than O(1) as a body's shape
+count grows; one body per shape hits Jolt's default 10240-body cap) — no
+`CollisionShape3D` nodes. Canopies are non-solid; colliders are skipped in
+the editor.
 
 The procedural `TerrainGenerator` + `Scatter` (`terrain.tscn`) are retired
 from `main.tscn` but kept working for reference; wind tests still use
