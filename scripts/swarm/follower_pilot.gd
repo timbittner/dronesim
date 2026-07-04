@@ -15,11 +15,7 @@ extends Node
 ## speed without needing position error as fuel. Sustained-zero signal still
 ## kills the drone through the controller's own lose_signal() path, unchanged.
 
-## Emitted on every behavior change — the swarm manager and (later) the HUD
-## listen; also the hook for priming behaviors externally.
-signal behavior_changed(new_behavior: Behavior)
-
-enum Behavior { FORMATION, HOLD, DISPATCHED, LANDING, LANDED, TAKEOFF, DOWN }
+enum Behavior { FORMATION, DISPATCHED, LANDING, LANDED, TAKEOFF, DOWN }
 
 ## Mean target-update dropouts per second at zero signal quality — same
 ## semantics (and default) as DroneController.packet_loss_rate.
@@ -222,7 +218,6 @@ func set_behavior(b: Behavior) -> void:
 		_offset_primed = false  # stale _prev_offset would spike the derivative
 	if b != Behavior.DISPATCHED and _mode != null:
 		_mode.strike = false  # leaving a run disarms the strike law
-	behavior_changed.emit(b)
 
 
 func _physics_process(delta: float) -> void:
@@ -248,10 +243,8 @@ func _physics_process(delta: float) -> void:
 		if drone.global_position.y >= _mode.target_position.y - 0.5:
 			release()
 		return
-	if behavior != Behavior.FORMATION:
-		_mode.target_velocity = Vector3.ZERO  # HOLD: park on the frozen target
-		return
 
+	# Only FORMATION remains (DOWN returned at the top; the rest handled above).
 	_receive_leader_state(drone.signal_quality, delta)
 	if not _has_leader_state:
 		return

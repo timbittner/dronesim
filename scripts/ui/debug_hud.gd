@@ -9,7 +9,7 @@ extends CanvasLayer
 ## Explicit drone override; the fallback is group "player_drone" (P6).
 @export var drone_path: NodePath = NodePath("../Drone")
 @export var print_interval: int = 60  # frames between console telemetry prints
-## Periodic [HUD] console telemetry — off by default; the FlightRecorder JSONL
+## Periodic HUD console telemetry — off by default; the FlightRecorder JSONL
 ## is the real record. Flip on for live MCP debug capture.
 @export var console_telemetry: bool = false
 

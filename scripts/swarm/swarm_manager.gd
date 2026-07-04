@@ -187,15 +187,14 @@ func swarm_landing() -> bool:
 	return false
 
 
-## AUTO-LAND: everything lands in place — formation/holding followers AND the
-## player (a transient pilot takes the sticks; Triangle reset gives them back).
+## AUTO-LAND: everything lands in place — formation followers AND the player
+## (a transient pilot takes the sticks; Triangle reset gives them back).
 ## ponytail: dispatched runners finish their mission first and then rejoin
 ## (they hover at their slot over the landed leader) — land-on-rejoin if that
 ## ever grates.
 func land_all() -> void:
 	for pilot in pilots:
-		if pilot.behavior == FollowerPilot.Behavior.FORMATION \
-				or pilot.behavior == FollowerPilot.Behavior.HOLD:
+		if pilot.behavior == FollowerPilot.Behavior.FORMATION:
 			pilot.land()
 	var leader := _get_leader()
 	if leader != null and not leader.is_crashed() and not is_instance_valid(_player_pilot):
@@ -323,9 +322,3 @@ func _shell_start(shell: int) -> int:
 	for s in range(mini(shell, BOHR_SHELL_SIZES.size())):
 		start += BOHR_SHELL_SIZES[s]
 	return start
-
-
-## Cycle to the next formation (menu entry, P6 step 4).
-func cycle_formation() -> void:
-	formation = ((formation + 1) % Formation.size()) as Formation
-	print("[Swarm] formation: %s" % Formation.keys()[formation])
