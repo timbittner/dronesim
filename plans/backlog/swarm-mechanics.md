@@ -14,6 +14,10 @@ Still here:
   trigger and physically fly at / down the drone instead.
 - **Adversary drones** — **P7 candidate**: hostile swarm/aircraft beyond the
   interceptor, pairs with quest upgrades.
+- **Backup drone / swarm respawn** — **P7 candidate**: a menu action that
+  spawns a replacement follower at the spawn pad, with a cooldown. No new
+  flight logic needed — the P6 formation mode already flies to its slot from
+  anywhere, including a ground start, so the newcomer catches up on its own.
 - Hunter-Predator-style single-drone takeover: swarm goes standby on button,
   player controls one drone directly (MW2 style). The BOHR orbit half of this
   ships in P6; the takeover mechanic stays backlog.

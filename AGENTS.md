@@ -254,11 +254,17 @@ The `_rotor_positions` array order is `[FL, FR, BL, BR]` and the mixer output
 | L2 | Hold (analog) | Altitude hold — replaces collective with a PD hover hold; pitch/roll/yaw pass through |
 | R2 | Hold (analog) | Brake — tilts the airframe via rotor thrust to oppose horizontal velocity (adds to, doesn't override, pitch/roll from stick/mode); composes with altitude hold (brake = horizontal, altitude hold = vertical) |
 | Triangle | Press | Reset drone (also recovers from a crash / SIGNAL LOST) |
+| DPad ◀/▶ | Press | Open the swarm command menu (P6). Menu open: cycle the selected entry's value (staged) |
+| DPad ▲/▼ | Hold / Press | FPV camera tilt sweep (−30°…+60°). Menu open: select entry |
+| Cross | Press | Menu open: apply all staged changes and close |
+| Circle | Press | Menu open: abort — close, discard staged changes |
+| Mousewheel | Scroll | Zoom 3PV chase distance (10% steps, no effect in FPV) |
 
-While CRASHED only Triangle (reset) and R1 (camera toggle) are handled — L1 and
-all stick input are dead until reset.
+While CRASHED only Triangle (reset) and R1 (camera toggle) are handled — L1,
+the menu, and all stick input are dead until reset.
 
-Keyboard fallback: Shift = altitude_hold, Ctrl = brake_mode (see other actions'
+Keyboard fallback: Shift = altitude_hold, Ctrl = brake_mode; menu: Tab = open,
+I/K = up/down, J/L = left/right, Enter = apply, Esc = abort (see other actions'
 keyboard bindings in `project.godot`).
 
 **L2/R2 are analog axes, not buttons.** In Godot's abstracted joypad model,

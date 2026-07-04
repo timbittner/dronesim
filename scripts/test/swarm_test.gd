@@ -44,6 +44,7 @@ func _run_all_tests() -> void:
 	await _run_test("test_formation_integral_trims_drift")
 	await _run_test("test_pilot_dropout_freezes_target")
 	await _run_test("test_velocity_feed_forward")
+	await _run_test("test_pad_menu_navigation")
 	await _run_test("test_follower_holds_and_reconverges")
 
 	var total := _passed + _failed
@@ -280,6 +281,64 @@ func test_velocity_feed_forward() -> bool:
 	print("[TEST] ", "PASS" if pitches else "FAIL",
 			" — moving slot at zero error still commands tilt")
 	return pitches
+
+
+# ---------------------------------------------------------------------------
+# PadMenu state machine: navigation wraps, left/right stages a value without
+# applying, Cross applies + closes, Circle aborts (discards). Pure state — no
+# input events needed.
+# ---------------------------------------------------------------------------
+func test_pad_menu_navigation() -> bool:
+	print("[TEST] --- test_pad_menu_navigation ---")
+	var menu := PadMenu.new()
+	add_child(menu)
+
+	var applied := [-1, -1]  # last value each setter received
+	var value := [0, 0]      # backing "live" values
+	menu.entries = [
+		{"label": "A", "options": func() -> Array: return ["a0", "a1", "a2"],
+			"getter": func() -> int: return value[0],
+			"setter": func(v: int) -> void:
+				applied[0] = v
+				value[0] = v},
+		{"label": "B", "options": func() -> Array: return ["b0", "b1"],
+			"getter": func() -> int: return value[1],
+			"setter": func(v: int) -> void:
+				applied[1] = v
+				value[1] = v},
+	]
+
+	# Navigation wraps both ways.
+	menu._open()
+	var nav_ok: bool = menu.selected == 0
+	menu._navigate(1)
+	nav_ok = nav_ok and menu.selected == 1
+	menu._navigate(1)
+	nav_ok = nav_ok and menu.selected == 0
+	menu._navigate(-1)
+	nav_ok = nav_ok and menu.selected == 1
+
+	# Cycling stages but does NOT apply until Cross.
+	menu._cycle(1)  # B: b0 -> b1 (staged)
+	var staged_only: bool = menu.staged[1] == 1 and applied[1] == -1
+	menu._apply_and_close()
+	var applies: bool = applied[1] == 1 and value[1] == 1 and not menu.is_open
+
+	# Abort discards staged changes. (Reset the sentinel — the apply above
+	# legitimately wrote ALL entries, including A's unchanged value.)
+	applied[0] = -1
+	menu._open()
+	menu._cycle(1)  # A: a0 -> a1 staged
+	menu._abort()
+	var aborts: bool = applied[0] == -1 and value[0] == 0 and not menu.is_open
+
+	print("[TEST] nav=", nav_ok, " staged_only=", staged_only,
+			" applies=", applies, " aborts=", aborts)
+	menu.queue_free()
+	var passed := nav_ok and staged_only and applies and aborts
+	print("[TEST] ", "PASS" if passed else "FAIL",
+			" — wrap nav, stage on cycle, apply on Cross, discard on Circle")
+	return passed
 
 
 # ---------------------------------------------------------------------------

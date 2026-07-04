@@ -21,6 +21,10 @@ extends Camera3D
 ## This filters out high-frequency control-loop jitter while remaining responsive.
 @export var fpv_smoothing: float = 0.92
 
+## FPV camera tilt in degrees, positive = up (racing-drone style uptilt).
+## Adjusted live with dpad up/down outside menu mode (see PadMenu).
+@export_range(-30.0, 60.0) var fpv_pitch_deg: float = 0.0
+
 var _target: Node3D
 var _fpv: bool = false  # 3PV by default
 var _drone_controller: DroneController
@@ -71,7 +75,8 @@ func _update_fpv(delta: float) -> void:
 
 	# Rotation: smoothed via quaternion slerp to mask control-loop jitter.
 	# The position is rigid, so there's no drift bug.
-	var target_quat: Quaternion = _target.global_transform.basis.get_rotation_quaternion()
+	var target_quat: Quaternion = _target.global_transform.basis.get_rotation_quaternion() \
+			* Quaternion(Vector3.RIGHT, deg_to_rad(fpv_pitch_deg))
 	var current_quat: Quaternion = global_transform.basis.get_rotation_quaternion()
 	# Use delta-adjusted lerp for frame-rate independence
 	var lerp_factor: float = 1.0 - pow(1.0 - fpv_smoothing, 60.0 * delta)

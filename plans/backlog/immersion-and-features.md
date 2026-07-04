@@ -14,5 +14,9 @@
   `MissionTarget` type in [quests-and-scenarios.md](quests-and-scenarios.md).
 - **Multi-camera / gimbal** — a gimbal-stabilized camera feed separate from
   the airframe-locked FPV. Switching feeds is another DPad-menu candidate.
+- **UI color theme extraction** — the HUD palette (panel black 0.65α, text
+  green `0.35,1,0.35`, amber accent `1.0,0.72,0.1`, signal-lost red) is
+  hardcoded per-label across `debug_hud.gd` and `pad_menu.gd` (P6). Pull it
+  into one shared theme/constants file when a third UI surface appears.
 - **Sound simulation** — floated, but Tim is skeptical it's more than a
   gimmick. Low priority.
