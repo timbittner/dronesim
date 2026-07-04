@@ -13,7 +13,7 @@
 [ext_resource type="PackedScene" path="res://scenes/mission/mission_target.tscn" id="11_mission_target"]
 [ext_resource type="Script" uid="uid://da74w6dhtkv8i" path="res://scripts/mission/mission_tracker.gd" id="12_mission_tracker"]
 [ext_resource type="PackedScene" path="res://scenes/mission/jamming_node.tscn" id="13_trceg"]
-[ext_resource type="Script" path="res://scripts/swarm/swarm_manager.gd" id="14_swarm"]
+[ext_resource type="Script" uid="uid://17i8mg7j3nt" path="res://scripts/swarm/swarm_manager.gd" id="14_swarm"]
 
 [sub_resource type="BoxMesh" id="BoxMesh_pad"]
 size = Vector3(2, 0.1, 2)
@@ -66,8 +66,9 @@ environment = SubResource("Env_sky")
 [node name="Drone" parent="." unique_id=608845008 instance=ExtResource("1_drone_scene")]
 transform = Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, 0, 1, 0)
 
-[node name="SwarmManager" type="Node3D" parent="."]
+[node name="SwarmManager" type="Node3D" parent="." unique_id=1605920039]
 script = ExtResource("14_swarm")
+formation = 1
 
 [node name="CrashEffects" type="Node3D" parent="." unique_id=1077355102]
 script = ExtResource("5_crash_fx")

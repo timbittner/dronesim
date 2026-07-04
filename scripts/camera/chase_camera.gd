@@ -12,6 +12,9 @@ extends Camera3D
 @export var chase_distance: float = 2.2
 @export var chase_height: float = 0.9
 @export var follow_speed: float = 8.0
+## Mousewheel zoom bounds for the 3PV chase distance.
+@export var chase_distance_min: float = 1.2
+@export var chase_distance_max: float = 18.0
 
 ## FPV rotation smoothing factor (0..1). Higher = more smoothing.
 ## 0.92 means the camera covers 92% of the gap per frame — ~4 frames to settle.
@@ -34,6 +37,18 @@ func _set_target(node: Node) -> void:
 	_drone_controller = _target as DroneController
 	if _drone_controller:
 		_drone_controller.fpv_toggled.connect(_on_fpv_toggled)
+
+
+## Mousewheel zooms the 3PV chase distance (multiplicative steps so it feels
+## even across the whole range). No effect in FPV.
+func _unhandled_input(event: InputEvent) -> void:
+	if _fpv or not event is InputEventMouseButton or not event.pressed:
+		return
+	var mb := event as InputEventMouseButton
+	if mb.button_index == MOUSE_BUTTON_WHEEL_UP:
+		chase_distance = clampf(chase_distance * 0.9, chase_distance_min, chase_distance_max)
+	elif mb.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+		chase_distance = clampf(chase_distance / 0.9, chase_distance_min, chase_distance_max)
 
 
 func _physics_process(delta: float) -> void:

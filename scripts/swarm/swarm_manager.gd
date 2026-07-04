@@ -120,13 +120,40 @@ func _slot_offset(i: int) -> Vector3:
 			var a := TAU * i / maxf(follower_count, 1)
 			return Vector3(cos(a), 0.0, sin(a)) * ring_radius
 		Formation.BOHR:
-			# Electron cloud: shared radius, per-drone phase and a per-drone
-			# tilted orbital plane (alternating inclination) rotating over time.
-			var phase := TAU * i / maxf(follower_count, 1) + _time * bohr_speed
-			var incl := 0.6 * (1.0 if i % 2 == 0 else -1.0) + 0.15 * i
-			var flat := Vector3(cos(phase), 0.0, sin(phase)) * ring_radius
-			return flat.rotated(Vector3.RIGHT, incl * 0.5)
+			return _bohr_offset(i)
 	return Vector3.ZERO
+
+
+## Electron-cloud slot: shells of 2 / 8 / 8 / rest (Bohr occupancy), the
+## innermost hugging the leader, each shell on its own tilted orbital plane,
+## inner shells orbiting faster (electrons do too).
+const BOHR_SHELL_SIZES: Array[int] = [2, 8, 8]
+const BOHR_SHELL_RADII: Array[float] = [0.3, 1.0, 1.7, 2.4]  # × ring_radius
+const BOHR_SHELL_INCL: Array[float] = [0.5, -0.35, 0.3, -0.25]  # plane tilt, rad
+
+
+func _bohr_offset(i: int) -> Vector3:
+	var shell := 0
+	var idx := i
+	while shell < BOHR_SHELL_SIZES.size() and idx >= BOHR_SHELL_SIZES[shell]:
+		idx -= BOHR_SHELL_SIZES[shell]
+		shell += 1
+	var members: int = BOHR_SHELL_SIZES[shell] if shell < BOHR_SHELL_SIZES.size() \
+			else maxi(follower_count - 18, 1)
+	members = mini(members, maxi(follower_count - _shell_start(shell), 1))
+	var r: float = ring_radius * BOHR_SHELL_RADII[mini(shell, BOHR_SHELL_RADII.size() - 1)]
+	var speed: float = bohr_speed * sqrt(ring_radius / r)
+	var phase := TAU * idx / members + _time * speed
+	var incl: float = BOHR_SHELL_INCL[mini(shell, BOHR_SHELL_INCL.size() - 1)]
+	return Vector3(cos(phase), 0.0, sin(phase)).rotated(Vector3.RIGHT, incl) * r
+
+
+## First follower index belonging to `shell` (0, 2, 10, 18, ...).
+func _shell_start(shell: int) -> int:
+	var start := 0
+	for s in range(mini(shell, BOHR_SHELL_SIZES.size())):
+		start += BOHR_SHELL_SIZES[s]
+	return start
 
 
 ## Basis rotating a leader-local offset (right = +X, tail = +Z) into world.

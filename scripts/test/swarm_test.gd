@@ -100,11 +100,16 @@ func test_slot_tables() -> bool:
 			and not r0.is_equal_approx(r1)
 
 	m.formation = SwarmManager.Formation.BOHR
+	m.follower_count = 10  # 2 in shell 0, 8 in shell 1
 	m._time = 0.0
 	var b_t0 := m.get_slot_position(0)
 	m._time = 1.0
 	var b_t1 := m.get_slot_position(0)
-	var bohr_ok: bool = not b_t0.is_equal_approx(b_t1)
+	var inner := (m.get_slot_position(0) - base).length()   # shell 0: tight
+	var outer := (m.get_slot_position(2) - base).length()   # shell 1: ring_radius
+	var bohr_ok: bool = not b_t0.is_equal_approx(b_t1) \
+			and inner < outer * 0.5 \
+			and absf(outer - 9.0) < 0.01
 
 	# The deferred _spawn_followers hasn't fired yet (this test runs
 	# synchronously) — zero the count again so this table-only manager never
