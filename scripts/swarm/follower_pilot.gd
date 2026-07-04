@@ -51,6 +51,17 @@ func setup(follower: DroneController, swarm_manager: Node, index: int) -> void:
 	_target_heading = 0.0
 
 
+## Live gain push from the SwarmManager's Formation Gains exports (each tick,
+## so remote-inspector tuning takes effect immediately).
+func apply_gains(pos_p: float, pos_i: float, vel_p: float, speed: float) -> void:
+	if _mode == null:
+		return
+	_mode.pos_p_gain = pos_p
+	_mode.pos_i_gain = pos_i
+	_mode.vel_p_gain = vel_p
+	_mode.max_speed = speed
+
+
 func set_behavior(b: Behavior) -> void:
 	if b == behavior:
 		return

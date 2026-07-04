@@ -7,7 +7,7 @@ extends FlightModeBase
 ## into stabilized mode breaks down when the leader flies acro; computing from
 ## the target position keeps the follower stable whenever the target path is.
 ##
-## Control cascade, all plain PD:
+## Control cascade (PD + a position integral for drift trim):
 ##   position error → desired velocity → desired acceleration → desired thrust
 ##   direction (body-up target) → restoring torque (same angle-P / gyro-D law
 ##   as stabilized auto-level, aimed at the tilted up-vector instead of level)
@@ -16,7 +16,8 @@ extends FlightModeBase
 ## The pilot (FollowerPilot) writes target_* (radio-side: freezes on packet
 ## loss) and current_* (onboard sensors: always fresh) every physics tick.
 
-# Set once by the pilot at construction (same handoff as FlightModeStabilized).
+# Set once by the pilot at construction (same handoff as FlightModeStabilized —
+# overwritten from the drone's actual values, editing these defaults is inert).
 var hover_throttle: float = 0.0
 var max_thrust: float = 17.5
 
@@ -29,13 +30,23 @@ var target_heading: float = 0.0
 var current_position: Vector3 = Vector3.ZERO
 var current_velocity: Vector3 = Vector3.ZERO
 
-# --- Tuning knobs ---
+# --- Tuning knobs (live-tunable via SwarmManager's Formation Gains exports,
+# pushed into every pilot's mode each physics tick) ---
 ## m of horizontal position error → m/s of desired velocity.
-var pos_p_gain: float = 0.8
+var pos_p_gain: float = 2.0
+## Integral: m·s of accumulated position error → m/s of desired velocity.
+## Trims out persistent drift (wind) without the controller knowing the wind —
+## it only sees that it keeps missing the slot. Anti-windup below.
+var pos_i_gain: float = 0.4
+## Only integrate within this error radius (m) — approach transients from big
+## moves shouldn't wind the trim up.
+var integrate_radius: float = 3.0
+## Cap on the integral's velocity contribution, m/s (anti-windup clamp).
+var max_i_speed: float = 3.0
 ## Max commanded horizontal speed toward the slot, m/s.
-var max_speed: float = 12.0
+var max_speed: float = 20.0
 ## m/s of horizontal velocity error → m/s² of desired acceleration.
-var vel_p_gain: float = 2.0
+var vel_p_gain: float = 3.0
 ## Max tilt of the desired thrust direction from vertical, radians (~30°).
 var max_tilt: float = 0.55
 ## Attitude restoring gains — same law as stabilized auto-level.
@@ -51,6 +62,7 @@ var yaw_p_gain: float = 1.2
 var yaw_d_gain: float = 0.3
 
 var _filtered_ang_vel: Vector3 = Vector3.ZERO
+var _err_integral: Vector3 = Vector3.ZERO
 var _gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity")
 
 
@@ -62,7 +74,7 @@ func compute(
 	_yaw: float,
 	basis: Basis,
 	angular_velocity: Vector3,
-	_delta: float
+	delta: float
 ) -> FlightControl:
 	var result := FlightControl.new()
 	var torque_to_offset: float = 1.0 / max_thrust
@@ -70,7 +82,13 @@ func compute(
 	# --- Horizontal position → velocity → acceleration cascade ---
 	var err := target_position - current_position
 	var err_h := Vector3(err.x, 0.0, err.z)
-	var vel_des := (err_h * pos_p_gain).limit_length(max_speed)
+	# Integral trim: only near the slot (approach transients from big moves
+	# don't wind it up), clamped to max_i_speed worth of velocity command.
+	if err_h.length() < integrate_radius:
+		_err_integral = (_err_integral + err_h * delta) \
+				.limit_length(max_i_speed / maxf(pos_i_gain, 0.001))
+	var vel_des := (err_h * pos_p_gain + _err_integral * pos_i_gain) \
+			.limit_length(max_speed)
 	var vel_h := Vector3(current_velocity.x, 0.0, current_velocity.z)
 	var accel_des := (vel_des - vel_h) * vel_p_gain
 

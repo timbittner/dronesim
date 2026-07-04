@@ -41,6 +41,7 @@ func _run_all_tests() -> void:
 
 	await _run_test("test_slot_tables")
 	await _run_test("test_formation_control_law_signs")
+	await _run_test("test_formation_integral_trims_drift")
 	await _run_test("test_pilot_dropout_freezes_target")
 	await _run_test("test_follower_holds_and_reconverges")
 
@@ -105,11 +106,15 @@ func test_slot_tables() -> bool:
 	var b_t0 := m.get_slot_position(0)
 	m._time = 1.0
 	var b_t1 := m.get_slot_position(0)
-	var inner := (m.get_slot_position(0) - base).length()   # shell 0: tight
-	var outer := (m.get_slot_position(2) - base).length()   # shell 1: ring_radius
+	var inner := (m.get_slot_position(0) - base).length()   # shell 0
+	var outer := (m.get_slot_position(2) - base).length()   # shell 1
+	# Radii follow the (tunable) shell table — assert structure, not numbers.
+	var r_inner: float = m.ring_radius * SwarmManager.BOHR_SHELL_RADII[0]
+	var r_outer: float = m.ring_radius * SwarmManager.BOHR_SHELL_RADII[1]
 	var bohr_ok: bool = not b_t0.is_equal_approx(b_t1) \
-			and inner < outer * 0.5 \
-			and absf(outer - 9.0) < 0.01
+			and absf(inner - r_inner) < 0.01 \
+			and absf(outer - r_outer) < 0.01 \
+			and r_inner < r_outer
 
 	# The deferred _spawn_followers hasn't fired yet (this test runs
 	# synchronously) — zero the count again so this table-only manager never
@@ -171,6 +176,48 @@ func test_formation_control_law_signs() -> bool:
 			" up=", up_ok, " down=", down_ok, " yaw=", yaw_ok)
 	var passed := level_ok and pitch_ok and roll_ok and up_ok and down_ok and yaw_ok
 	print("[TEST] ", "PASS" if passed else "FAIL", " — control-law signs per error axis")
+	return passed
+
+
+# ---------------------------------------------------------------------------
+# Position integral: a small persistent error (a stand-in for wind drift the
+# controller can't see) winds up a growing tilt command over time, and the
+# anti-windup clamp caps it. Big errors (outside integrate_radius) don't wind.
+# ---------------------------------------------------------------------------
+func test_formation_integral_trims_drift() -> bool:
+	print("[TEST] --- test_formation_integral_trims_drift ---")
+	var basis := Basis.IDENTITY
+	var no_spin := Vector3.ZERO
+	var dt := 1.0 / 60.0
+
+	# Persistent 0.2 m error ahead (small enough that the P term alone stays
+	# well under the max_offset clamp): the commanded pitch must GROW as the
+	# integral accumulates (P alone would hold it constant).
+	var mode := _fresh_mode()
+	mode.target_position = Vector3(0, 0, -0.2)
+	var first := mode.compute(0, 0, 0, 0, basis, no_spin, dt)
+	var early := absf(first.pitch_diff)
+	for i in range(300):  # 5 s
+		mode.compute(0, 0, 0, 0, basis, no_spin, dt)
+	var late := absf(mode.compute(0, 0, 0, 0, basis, no_spin, dt).pitch_diff)
+	var grows: bool = late > early * 1.2
+
+	# Clamped: integral velocity contribution never exceeds max_i_speed.
+	var i_speed: float = (mode._err_integral * mode.pos_i_gain).length()
+	var clamped: bool = i_speed <= mode.max_i_speed + 0.001
+
+	# Outside integrate_radius nothing winds up.
+	mode = _fresh_mode()
+	mode.target_position = Vector3(0, 0, -10)
+	for i in range(120):
+		mode.compute(0, 0, 0, 0, basis, no_spin, dt)
+	var far_clean: bool = mode._err_integral.is_zero_approx()
+
+	print("[TEST] early=%.4f late=%.4f i_speed=%.2f far_clean=%s"
+			% [early, late, i_speed, far_clean])
+	var passed := grows and clamped and far_clean
+	print("[TEST] ", "PASS" if passed else "FAIL",
+			" — integral winds near the slot, clamps, ignores far errors")
 	return passed
 
 

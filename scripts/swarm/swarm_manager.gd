@@ -14,18 +14,30 @@ extends Node3D
 ## Number of follower drones to spawn.
 @export var follower_count: int = 5
 ## Nearest-neighbor spacing in the slot tables, meters.
-@export var spacing: float = 6.0
+@export var spacing: float = 1.5
 ## RING / BOHR orbit radius, meters.
-@export var ring_radius: float = 9.0
+@export var ring_radius: float = 4.0
 ## Followers fly this many meters above the leader (keeps them out of the
 ## player's face and off the ground when the leader sits on the pad).
-@export var altitude_offset: float = 4.0
+@export var altitude_offset: float = 0.0
 ## BOHR orbital angular speed, rad/s.
-@export var bohr_speed: float = 0.6
+@export var bohr_speed: float = 1.2
 
 enum Formation { LINE, V, RING, BOHR }
 
 @export var formation: Formation = Formation.LINE
+
+## Pushed into every pilot's FlightModeFormation each physics tick, so they
+## are live-tunable in the remote inspector while flying.
+@export_group("Formation Gains")
+## m of position error → m/s of desired velocity (snappiness of small moves).
+@export var pos_p_gain: float = 2.0
+## Integral trim — bleeds out persistent drift (wind) near the slot.
+@export var pos_i_gain: float = 0.4
+## m/s of velocity error → m/s² of desired acceleration.
+@export var vel_p_gain: float = 3.0
+## Max commanded speed toward the slot, m/s.
+@export var max_speed: float = 20.0
 
 const DRONE_SCENE: PackedScene = preload("res://scenes/drone/drone.tscn")
 
@@ -45,6 +57,8 @@ func _ready() -> void:
 
 func _physics_process(delta: float) -> void:
 	_time += delta
+	for pilot in pilots:
+		pilot.apply_gains(pos_p_gain, pos_i_gain, vel_p_gain, max_speed)
 
 
 func _spawn_followers() -> void:
@@ -128,8 +142,9 @@ func _slot_offset(i: int) -> Vector3:
 ## innermost hugging the leader, each shell on its own tilted orbital plane,
 ## inner shells orbiting faster (electrons do too).
 const BOHR_SHELL_SIZES: Array[int] = [2, 8, 8]
-const BOHR_SHELL_RADII: Array[float] = [0.3, 1.0, 1.7, 2.4]  # × ring_radius
-const BOHR_SHELL_INCL: Array[float] = [0.5, -0.35, 0.3, -0.25]  # plane tilt, rad
+const BOHR_SHELL_RADII: Array[float] = [0.8, 1.5, 2.0, 3]  # × ring_radius
+#const BOHR_SHELL_INCL: Array[float] = [0.0, -0.35, 0.3, -0.25]  # plane tilt, rad
+const BOHR_SHELL_INCL: Array[float] = [0.0, -1, 2, 1]  # plane tilt, rad
 
 
 func _bohr_offset(i: int) -> Vector3:

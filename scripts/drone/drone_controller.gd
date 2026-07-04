@@ -102,7 +102,7 @@ var _spawn_transform: Transform3D
 ## already absorbed much of the impact from linear_velocity.
 var _prev_velocity: Vector3 = Vector3.ZERO
 
-var _flight_mode: String = "acro"
+var _flight_mode: String = "stabilized"
 
 ## Average of the last applied rotor mix (post anti-clip/idle clamping), as a
 ## 0..100 percentage. This is the actual commanded thrust, not a recomputed
