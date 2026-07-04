@@ -540,6 +540,17 @@ func _apply_angular_damping() -> void:
 	apply_torque(global_transform.basis * damp_torque_local)
 
 
+## Install and activate an externally built flight mode — the P6 follower
+## pilot hands its drone a FlightModeFormation this way. The mode joins the
+## mode dictionary under `mode_name` (L1 toggling is player-only, so a
+## follower stays in this mode until the pilot swaps it).
+func set_flight_mode_object(mode_name: String, mode: FlightModeBase) -> void:
+	_flight_modes[mode_name] = mode
+	_flight_mode = mode_name
+	_current_mode = mode
+	flight_mode_changed.emit(_flight_mode)
+
+
 func _toggle_flight_mode() -> void:
 	_flight_mode = "acro" if _flight_mode == "stabilized" else "stabilized"
 	_current_mode = _flight_modes[_flight_mode]
