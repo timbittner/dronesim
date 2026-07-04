@@ -37,7 +37,10 @@ enum Formation { LINE, V, RING, BOHR }
 ## m/s of velocity error → m/s² of desired acceleration.
 @export var vel_p_gain: float = 3.0
 ## Max commanded speed toward the slot, m/s.
-@export var max_speed: float = 20.0
+@export var max_speed: float = 40.0
+## Max thrust-direction tilt, rad — sets the terminal speed against drag
+## (v = g·tan(max_tilt)·mass/drag_c ≈ 30 m/s at 1.0), not just agility.
+@export var max_tilt: float = 1.0
 
 const DRONE_SCENE: PackedScene = preload("res://scenes/drone/drone.tscn")
 
@@ -58,7 +61,7 @@ func _ready() -> void:
 func _physics_process(delta: float) -> void:
 	_time += delta
 	for pilot in pilots:
-		pilot.apply_gains(pos_p_gain, pos_i_gain, vel_p_gain, max_speed)
+		pilot.apply_gains(pos_p_gain, pos_i_gain, vel_p_gain, max_speed, max_tilt)
 
 
 func _spawn_followers() -> void:
@@ -98,23 +101,39 @@ func _leader_heading() -> float:
 	return atan2(leader.global_basis.z.x, leader.global_basis.z.z)
 
 
-## World-space slot target for follower `i` in the current formation,
-## relative to the leader's position and heading. Pure math on the leader
-## pose — unit-testable without physics.
+## The leader's broadcast state packet — the ONLY radio-side data in the
+## swarm link (position, velocity, heading, like real swarm telemetry).
+## Followers freeze this on packet loss; formation math stays follower-side.
+## Empty dictionary = no leader in the scene.
+func get_leader_state() -> Dictionary:
+	var leader := _get_leader()
+	if leader == null:
+		return {}
+	return {
+		"position": leader.global_position,
+		"velocity": leader.linear_velocity,
+		"heading": _leader_heading(),
+	}
+
+
+## Follower-side formation math: the slot offset for role `i` given a leader
+## heading (passed in, not read live, so a pilot can compute against its
+## frozen radio state during a dropout). Includes the altitude offset.
+func get_slot_offset(i: int, heading: float) -> Vector3:
+	return Vector3(0.0, altitude_offset, 0.0) + _slot_offset(i, heading)
+
+
+## Convenience composition (live leader state) — spawn placement and tests.
 func get_slot_position(i: int) -> Vector3:
 	var leader := _get_leader()
 	var origin := global_position if leader == null else leader.global_position
-	return origin + Vector3(0.0, altitude_offset, 0.0) + _slot_offset(i)
-
-
-## All formation slots face the leader's heading.
-func get_slot_heading(_i: int) -> float:
-	return _leader_heading()
+	return origin + get_slot_offset(i, _leader_heading())
 
 
 ## Horizontal slot offset for follower `i`, world frame. LINE and V are
-## anchored to the leader's heading; RING and BOHR are heading-independent.
-func _slot_offset(i: int) -> Vector3:
+## anchored to the given leader heading; RING and BOHR are heading-independent.
+func _slot_offset(i: int, heading: float) -> Vector3:
+	var hbasis := Basis(Vector3.UP, heading)
 	match formation:
 		Formation.LINE:
 			# Line abreast, alternating right/left of the leader:
@@ -122,13 +141,13 @@ func _slot_offset(i: int) -> Vector3:
 			@warning_ignore("integer_division")
 			var rank := (i / 2) + 1
 			var side := 1.0 if i % 2 == 0 else -1.0
-			return _heading_basis() * Vector3(side * rank * spacing, 0.0, 0.0)
+			return hbasis * Vector3(side * rank * spacing, 0.0, 0.0)
 		Formation.V:
 			# Two trailing wings at 45° behind the leader (tail = +Z locally).
 			@warning_ignore("integer_division")
 			var rank_v := (i / 2) + 1
 			var side_v := 1.0 if i % 2 == 0 else -1.0
-			return _heading_basis() * Vector3(
+			return hbasis * Vector3(
 					side_v * rank_v * spacing * 0.7071, 0.0, rank_v * spacing * 0.7071)
 		Formation.RING:
 			var a := TAU * i / maxf(follower_count, 1)
@@ -169,11 +188,6 @@ func _shell_start(shell: int) -> int:
 	for s in range(mini(shell, BOHR_SHELL_SIZES.size())):
 		start += BOHR_SHELL_SIZES[s]
 	return start
-
-
-## Basis rotating a leader-local offset (right = +X, tail = +Z) into world.
-func _heading_basis() -> Basis:
-	return Basis(Vector3.UP, _leader_heading())
 
 
 ## Cycle to the next formation (menu entry, P6 step 4).

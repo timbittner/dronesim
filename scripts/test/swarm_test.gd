@@ -12,14 +12,14 @@ var _failed: int = 0
 var _drone: DroneController = null
 
 
-## Manager stand-in for the pilot dropout test: a moving slot target.
+## Manager stand-in for the pilot dropout test: a moving leader.
 class StubManager extends Node:
 	var calls: int = 0
-	func get_slot_position(_i: int) -> Vector3:
+	func get_leader_state() -> Dictionary:
 		calls += 1
-		return Vector3(calls, 0, 0)
-	func get_slot_heading(_i: int) -> float:
-		return 0.0
+		return {"position": Vector3(calls, 0, 0), "velocity": Vector3.ZERO, "heading": 0.0}
+	func get_slot_offset(_i: int, _heading: float) -> Vector3:
+		return Vector3.ZERO
 
 
 func _ready() -> void:
@@ -43,6 +43,7 @@ func _run_all_tests() -> void:
 	await _run_test("test_formation_control_law_signs")
 	await _run_test("test_formation_integral_trims_drift")
 	await _run_test("test_pilot_dropout_freezes_target")
+	await _run_test("test_velocity_feed_forward")
 	await _run_test("test_follower_holds_and_reconverges")
 
 	var total := _passed + _failed
@@ -233,9 +234,9 @@ func _fresh_mode() -> FlightModeFormation:
 
 
 # ---------------------------------------------------------------------------
-# Pilot radio-side freeze: at zero signal quality every update attempt becomes
-# a dropout (rate 3/s × delta 1.0 ⇒ probability ≥ 1), so the slot target stays
-# stale; at full quality it tracks the manager every call.
+# Pilot radio-side freeze: at zero signal quality every receive attempt becomes
+# a dropout (rate 3/s × delta 1.0 ⇒ probability ≥ 1), so the leader state
+# stays stale; at full quality it tracks the moving leader every call.
 # ---------------------------------------------------------------------------
 func test_pilot_dropout_freezes_target() -> bool:
 	print("[TEST] --- test_pilot_dropout_freezes_target ---")
@@ -244,24 +245,41 @@ func test_pilot_dropout_freezes_target() -> bool:
 	var pilot := FollowerPilot.new()
 	pilot.manager = stub
 
-	# Full quality: target follows the stub's moving slot.
-	pilot._update_target_from_slot(1.0, 1.0)
-	var first := pilot._target_position
-	pilot._update_target_from_slot(1.0, 1.0)
-	var tracks: bool = pilot._target_position != first
+	# Full quality: the leader state tracks the stub's moving leader.
+	pilot._receive_leader_state(1.0, 1.0)
+	var first := pilot._leader_pos
+	pilot._receive_leader_state(1.0, 1.0)
+	var tracks: bool = pilot._leader_pos != first
 
-	# Zero quality: dropout every attempt — the target freezes.
-	var frozen := pilot._target_position
+	# Zero quality: dropout every attempt — the leader state freezes.
+	var frozen := pilot._leader_pos
 	for i in range(5):
-		pilot._update_target_from_slot(0.0, 1.0)
-	var freezes: bool = pilot._target_position == frozen
+		pilot._receive_leader_state(0.0, 1.0)
+	var freezes: bool = pilot._leader_pos == frozen
 
 	pilot.free()
 	stub.queue_free()
 	print("[TEST] tracks=", tracks, " freezes=", freezes)
 	var passed := tracks and freezes
-	print("[TEST] ", "PASS" if passed else "FAIL", " — target tracks at q=1, freezes at q=0")
+	print("[TEST] ", "PASS" if passed else "FAIL", " — leader state tracks at q=1, freezes at q=0")
 	return passed
+
+
+# ---------------------------------------------------------------------------
+# Velocity feed-forward: with ZERO position error but a forward-moving slot,
+# the mode must already command nose-down (P alone would command nothing).
+# ---------------------------------------------------------------------------
+func test_velocity_feed_forward() -> bool:
+	print("[TEST] --- test_velocity_feed_forward ---")
+	var mode := _fresh_mode()
+	mode.target_velocity = Vector3(0, 0, -5)  # slot moving nose-ward at 5 m/s
+	var c := mode.compute(0, 0, 0, 0, Basis.IDENTITY, Vector3.ZERO, 1.0 / 60.0)
+	var pitches: bool = c.pitch_diff < -0.001
+
+	print("[TEST] pitch_diff=%.3f" % c.pitch_diff)
+	print("[TEST] ", "PASS" if pitches else "FAIL",
+			" — moving slot at zero error still commands tilt")
+	return pitches
 
 
 # ---------------------------------------------------------------------------

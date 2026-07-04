@@ -25,6 +25,10 @@ var max_thrust: float = 17.5
 var target_position: Vector3 = Vector3.ZERO
 ## Desired nose heading in radians around Y (Godot yaw; nose = −Z at 0).
 var target_heading: float = 0.0
+## Slot velocity feed-forward (leader velocity + local orbital motion): lets
+## the follower match a moving slot at zero position error instead of needing
+## error as fuel — removes the trailing lag while the leader flies.
+var target_velocity: Vector3 = Vector3.ZERO
 
 # --- Onboard state (always fresh) ---
 var current_position: Vector3 = Vector3.ZERO
@@ -44,11 +48,14 @@ var integrate_radius: float = 3.0
 ## Cap on the integral's velocity contribution, m/s (anti-windup clamp).
 var max_i_speed: float = 3.0
 ## Max commanded horizontal speed toward the slot, m/s.
-var max_speed: float = 20.0
+var max_speed: float = 40.0
 ## m/s of horizontal velocity error → m/s² of desired acceleration.
 var vel_p_gain: float = 3.0
-## Max tilt of the desired thrust direction from vertical, radians (~30°).
-var max_tilt: float = 0.55
+## Max tilt of the desired thrust direction from vertical, radians. This sets
+## the follower's TERMINAL SPEED against drag, not just agility: sustained
+## v = g·tan(max_tilt)·m/c (≈ 30 m/s at 1.0 rad with c=1, m=2). 0.55 rad
+## capped them at ~12 m/s.
+var max_tilt: float = 1.0
 ## Attitude restoring gains — same law as stabilized auto-level.
 var attitude_p_gain: float = 15.0
 var attitude_d_gain: float = 4.0
@@ -87,7 +94,8 @@ func compute(
 	if err_h.length() < integrate_radius:
 		_err_integral = (_err_integral + err_h * delta) \
 				.limit_length(max_i_speed / maxf(pos_i_gain, 0.001))
-	var vel_des := (err_h * pos_p_gain + _err_integral * pos_i_gain) \
+	var ff_h := Vector3(target_velocity.x, 0.0, target_velocity.z)
+	var vel_des := (ff_h + err_h * pos_p_gain + _err_integral * pos_i_gain) \
 			.limit_length(max_speed)
 	var vel_h := Vector3(current_velocity.x, 0.0, current_velocity.z)
 	var accel_des := (vel_des - vel_h) * vel_p_gain
@@ -117,9 +125,12 @@ func compute(
 	result.pitch_diff = clampf(body_torque.x * torque_to_offset, -max_offset, max_offset)
 	result.roll_diff = clampf(-body_torque.z * torque_to_offset, -max_offset, max_offset)
 
-	# --- Altitude: PD on height error → collective around hover ---
+	# --- Altitude: PD on height error → collective around hover. The D term
+	# damps relative to the target's own climb rate (vertical feed-forward),
+	# so a climbing leader isn't fought as if the follower were drifting. ---
 	result.collective = clampf(
-		hover_throttle + err.y * alt_p_gain - current_velocity.y * alt_d_gain,
+		hover_throttle + err.y * alt_p_gain
+			- (current_velocity.y - target_velocity.y) * alt_d_gain,
 		0.05, 1.0)  # floor keeps rotors alive — a follower never throttle-cuts mid-air
 
 	# --- Heading: PD on yaw error → torque ---
