@@ -14,10 +14,21 @@ Still here:
   trigger and physically fly at / down the drone instead.
 - **Adversary drones** — **P7 candidate**: hostile swarm/aircraft beyond the
   interceptor, pairs with quest upgrades.
-- **Backup drone / swarm respawn** — **P7 candidate**: a menu action that
-  spawns a replacement follower at the spawn pad, with a cooldown. No new
-  flight logic needed — the P6 formation mode already flies to its slot from
-  anywhere, including a ground start, so the newcomer catches up on its own.
+- **Better kamikaze autopilot** — P6 shipped a working-but-blunt strike
+  (`flight_mode_formation.gd::_strike()` + `follower_pilot.gd` arming): the
+  dispatched drone settles directly overhead the CRASH target, cuts throttle to
+  idle, and free-falls onto it — gravity is the weapon, since a quad can't
+  power-dive a ground target (thrust points up). Reliable, but it circles a beat
+  to settle and can arm slightly off-centre, so it's weak against small or
+  moving targets. Improve it: optimise for the drone's own local up-vector
+  (commit to an inverted power-dive without the tumble the naive PD-restoring
+  attempt produced — likely needs a momentum-managed flip), and/or a smarter
+  approach trajectory (a curved run-in that arrives already descending, so it
+  never has to null horizontal speed overhead first).
+- **Backup drone / swarm respawn** — **shipped in P6** (menu CALL BACKUP:
+  spawns a replacement follower above the pad on a cooldown; the formation mode
+  flies it to its slot from the ground start). Left here as the anchor for the
+  P7 extensions: respawn tied to quest/backup inventory, adversary attrition.
 - Hunter-Predator-style single-drone takeover: swarm goes standby on button,
   player controls one drone directly (MW2 style). The BOHR orbit half of this
   ships in P6; the takeover mechanic stays backlog.

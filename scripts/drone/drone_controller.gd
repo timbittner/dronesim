@@ -343,7 +343,7 @@ func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 
 func _crash(momentum: float) -> void:
 	_enter_crashed()
-	print("[Drone] CRASH — signal lost (impact momentum %.1f kg·m/s)" % momentum)
+	print("[%s] CRASH — signal lost (impact momentum %.1f kg·m/s)" % [name, momentum])
 
 
 ## Kill the radio link without an impact: same CRASHED transition as a crash
@@ -354,7 +354,7 @@ func lose_signal() -> void:
 	if _state == State.CRASHED:
 		return
 	_enter_crashed()
-	print("[Drone] SIGNAL LOST — radio link dead")
+	print("[%s] SIGNAL LOST — radio link dead" % name)
 
 
 func _enter_crashed() -> void:
@@ -548,6 +548,16 @@ func set_flight_mode_object(mode_name: String, mode: FlightModeBase) -> void:
 	_flight_modes[mode_name] = mode
 	_flight_mode = mode_name
 	_current_mode = mode
+	flight_mode_changed.emit(_flight_mode)
+
+
+## Switch to an already-installed mode by name — the auto-land pilot restores
+## the player's previous mode ("acro"/"stabilized") through this on release.
+func select_flight_mode(mode_name: String) -> void:
+	if not _flight_modes.has(mode_name):
+		return
+	_flight_mode = mode_name
+	_current_mode = _flight_modes[mode_name]
 	flight_mode_changed.emit(_flight_mode)
 
 

@@ -45,7 +45,12 @@ func _run_all_tests() -> void:
 	await _run_test("test_pilot_dropout_freezes_target")
 	await _run_test("test_velocity_feed_forward")
 	await _run_test("test_pad_menu_navigation")
+	await _run_test("test_dispatch_selection_and_aim")
+	await _run_test("test_backup_cooldown")
+	await _run_test("test_player_autoland_mode_restore")
 	await _run_test("test_follower_holds_and_reconverges")
+	await _run_test("test_autoland_settles_and_takes_off")
+	await _run_test("test_kamikaze_clears_crash_target")
 
 	var total := _passed + _failed
 	print("[TEST] ========================================")
@@ -342,6 +347,137 @@ func test_pad_menu_navigation() -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Dispatch (P6 step 4): the manager picks the NEAREST formation follower, busy
+# followers are skipped, an all-busy swarm refuses; the pilot aims a hover
+# height above bare points but straight AT a live CRASH target (kamikaze), and
+# rejoins the formation once its target reads cleared. No physics settling —
+# positions are teleported and checked synchronously.
+# ---------------------------------------------------------------------------
+func test_dispatch_selection_and_aim() -> bool:
+	print("[TEST] --- test_dispatch_selection_and_aim ---")
+	var m := SwarmManager.new()
+	m.follower_count = 2
+	add_child(m)
+	await get_tree().physics_frame  # deferred spawn
+	await get_tree().physics_frame
+	if m.pilots.size() != 2:
+		printerr("[TEST] followers not spawned")
+		m.queue_free()
+		return false
+	var p0: FollowerPilot = m.pilots[0]
+	var p1: FollowerPilot = m.pilots[1]
+	p0.drone.global_position = Vector3(0, 5, 0)
+	p1.drone.global_position = Vector3(50, 5, 0)
+	var point := Vector3(60, 0, 0)
+
+	var nearest_ok: bool = m.dispatch(point, null) == p1 \
+			and p1.behavior == FollowerPilot.Behavior.DISPATCHED
+	var busy_skipped: bool = m.dispatch(point, null) == p0  # p1 is busy now
+	var all_busy_refused: bool = m.dispatch(point, null) == null
+
+	# Bare point → hover observe_altitude above it.
+	var hover_ok: bool = p1._dispatch_aim() \
+			.is_equal_approx(point + Vector3.UP * p1.observe_altitude)
+
+	# Live CRASH target → hold station overhead at the dispatch-time cruise
+	# altitude until settled, then _fly_dispatch arms the free-fall strike.
+	var t := MissionTarget.new()
+	t.type = MissionTarget.Type.CRASH
+	add_child(t)
+	t.global_position = Vector3(60, 0, 0)
+	p0.drone.global_position = Vector3(0, 20, 0)  # dispatch altitude to hold
+	p0.dispatch(t.global_position, t)
+	var cruise_ok: bool = p0._dispatch_aim().is_equal_approx(Vector3(60, 20, 0))
+	# Settled directly over the target, horizontal speed bled off → strike arms
+	# (one tick to latch _plunging, the next to set the mode's strike flag).
+	p0.drone.global_position = Vector3(60, 8, 0)
+	p0.drone.linear_velocity = Vector3.ZERO
+	p0._fly_dispatch(1.0 / 60.0)
+	p0._fly_dispatch(1.0 / 60.0)
+	var arms: bool = p0._plunging and p0._mode.strike
+
+	# A target cleared BEFORE the drop arms → rejoin instead of a pointless dive.
+	var p_extra: FollowerPilot = m.pilots[0]  # reuse a formation pilot
+	p_extra.dispatch(Vector3(5, 5, 0), t)  # t is now cleared below
+	t.cleared = true
+	p_extra.drone.global_position = Vector3(30, 8, 0)  # not yet over the target
+	p_extra.drone.linear_velocity = Vector3.ZERO
+	p_extra._fly_dispatch(1.0 / 60.0)
+	var rejoins: bool = p_extra.behavior == FollowerPilot.Behavior.FORMATION
+
+	print("[TEST] nearest=", nearest_ok, " busy_skipped=", busy_skipped,
+			" refused=", all_busy_refused, " hover=", hover_ok,
+			" cruise=", cruise_ok, " arms=", arms, " rejoins=", rejoins)
+	t.queue_free()
+	m.queue_free()
+	var passed := nearest_ok and busy_skipped and all_busy_refused \
+			and hover_ok and cruise_ok and arms and rejoins
+	print("[TEST] ", "PASS" if passed else "FAIL",
+			" — nearest-formation pick, per-type aim, rejoin on cleared")
+	return passed
+
+
+# ---------------------------------------------------------------------------
+# CALL BACKUP: first call spawns a follower at the pad, an immediate second
+# call is refused by the cooldown, and the roster/count stay consistent.
+# ---------------------------------------------------------------------------
+func test_backup_cooldown() -> bool:
+	print("[TEST] --- test_backup_cooldown ---")
+	var m := SwarmManager.new()
+	m.follower_count = 0
+	add_child(m)
+	await get_tree().physics_frame  # let the (empty) deferred spawn fire first
+
+	var first: bool = m.call_backup()
+	var second: bool = m.call_backup()
+	var roster_ok: bool = m.pilots.size() == 1 and m.follower_count == 1
+
+	print("[TEST] first=", first, " second=", second, " roster_ok=", roster_ok)
+	# Zero the count so queue_free never re-spawns anything deferred.
+	m.follower_count = 0
+	m.queue_free()
+	var passed := first and not second and roster_ok
+	print("[TEST] ", "PASS" if passed else "FAIL",
+			" — backup spawns once, cooldown refuses the second call")
+	return passed
+
+
+# ---------------------------------------------------------------------------
+# Player auto-land handoff (numerical, no physics settling): setup_landing
+# swaps the player onto the autoland mode, holds the current heading (no yaw
+# to north), begin_takeoff climbs toward release_altitude AGL, and release()
+# hands back stabilized.
+# ---------------------------------------------------------------------------
+func test_player_autoland_mode_restore() -> bool:
+	print("[TEST] --- test_player_autoland_mode_restore ---")
+	var m := SwarmManager.new()
+	m.follower_count = 0
+	add_child(m)
+
+	var pilot := FollowerPilot.new()
+	add_child(pilot)
+	pilot.setup_landing(_drone, m)
+	var heading := atan2(_drone.global_basis.z.x, _drone.global_basis.z.z)
+	var landing: bool = pilot.behavior == FollowerPilot.Behavior.LANDING \
+			and _drone.get_flight_mode() == "autoland" \
+			and absf(pilot._mode.target_heading - heading) < 0.001
+
+	pilot.begin_takeoff()
+	var climbs: bool = pilot.behavior == FollowerPilot.Behavior.TAKEOFF \
+			and absf(pilot._mode.target_position.y - pilot.release_altitude) < 0.001
+
+	pilot.release()
+	var restored: bool = _drone.get_flight_mode() == "stabilized"
+
+	print("[TEST] landing=", landing, " climbs=", climbs, " restored=", restored)
+	m.queue_free()
+	var passed := landing and climbs and restored
+	print("[TEST] ", "PASS" if passed else "FAIL",
+			" — autoland holds heading, climbs before handoff, releases stabilized")
+	return passed
+
+
+# ---------------------------------------------------------------------------
 # The one flight test: a single follower spawned in its slot HOLDS it while
 # hovering (3 s), then re-converges after being shoved 6 m off (4 s). Pins the
 # whole pipeline: manager spawn → pilot tick → formation mode → mixer → rotors.
@@ -377,4 +513,88 @@ func test_follower_holds_and_reconverges() -> bool:
 	var passed := holds and reconverges
 	print("[TEST] ", "PASS" if passed else "FAIL",
 			" — follower holds slot and re-converges after a 6 m shove")
+	return passed
+
+
+# ---------------------------------------------------------------------------
+# Auto-land flight test (bounded): a follower lands in place without crashing
+# (flown descent, motor cut at touchdown), then takes off and re-converges to
+# its slot. Scene ground is at y≈0 and the manager has no Terrain node, so
+# ground_height()'s 0.0 fallback matches reality here.
+# ---------------------------------------------------------------------------
+func test_autoland_settles_and_takes_off() -> bool:
+	print("[TEST] --- test_autoland_settles_and_takes_off ---")
+	var m := SwarmManager.new()
+	m.follower_count = 1
+	add_child(m)
+	await get_tree().physics_frame
+	await get_tree().physics_frame
+	if m.pilots.size() != 1:
+		printerr("[TEST] no follower spawned")
+		m.queue_free()
+		return false
+	var pilot: FollowerPilot = m.pilots[0]
+	var follower: DroneController = pilot.drone
+
+	pilot.land()
+	for i in range(240):  # 4 s: ~1 m descent at 1.5 m/s + settle
+		await get_tree().physics_frame
+	var landed: bool = pilot.behavior == FollowerPilot.Behavior.LANDED
+	var intact: bool = not follower.is_crashed()
+	var on_ground: bool = follower.global_position.y < 0.6
+
+	pilot.takeoff()
+	for i in range(240):
+		await get_tree().physics_frame
+	var slot_err: float = (follower.global_position - m.get_slot_position(0)).length()
+	var back_up: bool = pilot.behavior == FollowerPilot.Behavior.FORMATION and slot_err < 2.0
+
+	print("[TEST] landed=%s intact=%s y=%.2f slot_err=%.2f"
+			% [landed, intact, follower.global_position.y, slot_err])
+	m.queue_free()
+	var passed := landed and intact and on_ground and back_up
+	print("[TEST] ", "PASS" if passed else "FAIL",
+			" — lands in place without crashing, takes off back to the slot")
+	return passed
+
+
+# ---------------------------------------------------------------------------
+# Kamikaze end-to-end (bounded): a dispatched follower's impact must CLEAR a
+# CRASH MissionTarget — the follower is in group "drone" like the player, so
+# its crash_detected counts. Regression: in-editor only leader crashes cleared.
+# ---------------------------------------------------------------------------
+func test_kamikaze_clears_crash_target() -> bool:
+	print("[TEST] --- test_kamikaze_clears_crash_target ---")
+	var m := SwarmManager.new()
+	m.follower_count = 1
+	add_child(m)
+	var t := MissionTarget.new()
+	t.type = MissionTarget.Type.CRASH
+	t.radius = 6.0
+	add_child(t)
+	t.global_position = Vector3(20, 0.9, 0)
+	await get_tree().physics_frame
+	await get_tree().physics_frame
+	if m.pilots.size() != 1:
+		printerr("[TEST] no follower spawned")
+		m.queue_free()
+		t.queue_free()
+		return false
+	var pilot: FollowerPilot = m.pilots[0]
+
+	pilot.dispatch(t.global_position, t)
+	for i in range(600):  # up to 10 s for the run
+		await get_tree().physics_frame
+		if pilot.behavior == FollowerPilot.Behavior.DOWN:
+			break
+	var crashed: bool = pilot.drone.is_crashed()
+	var dist: float = (pilot.drone.global_position - t.global_position).length()
+	var cleared: bool = t.cleared
+
+	print("[TEST] crashed=%s cleared=%s impact_dist=%.1f" % [crashed, cleared, dist])
+	m.queue_free()
+	t.queue_free()
+	var passed := crashed and cleared
+	print("[TEST] ", "PASS" if passed else "FAIL",
+			" — follower kamikaze impact clears the CRASH target")
 	return passed

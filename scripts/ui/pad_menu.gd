@@ -54,17 +54,32 @@ func _build_entries() -> void:
 					m.formation = v as SwarmManager.Formation
 					print("[Swarm] formation: %s" % SwarmManager.Formation.keys()[v]),
 		},
-		# ponytail: stubs — real behaviors land in P6 step 4 (auto-land,
-		# recall); until then they only prove out the menu navigation.
 		{
-			"label": "AUTO-LAND",
+			# Toggles: lands the whole swarm (player included) in place, or
+			# sends everyone back up. Label is a Callable — resolved on refresh.
+			"label": func() -> String:
+				var m := _swarm_manager()
+				return "TAKE OFF" if m != null and m.swarm_landing() else "AUTO-LAND",
 			"kind": "action",
-			"action": func() -> void: print("[Swarm] AUTO-LAND (stub — step 4)"),
+			"action": func() -> void:
+				var m := _swarm_manager()
+				if m == null:
+					return
+				if m.swarm_landing():
+					m.take_off_all()
+				else:
+					m.land_all(),
 		},
 		{
-			"label": "RECALL",
+			"label": func() -> String:
+				var m := _swarm_manager()
+				var left: float = m.backup_cooldown_left() if m != null else 0.0
+				return "CALL BACKUP" if left <= 0.0 else "CALL BACKUP (%ds)" % ceili(left),
 			"kind": "action",
-			"action": func() -> void: print("[Swarm] RECALL (stub — step 4)"),
+			"action": func() -> void:
+				var m := _swarm_manager()
+				if m != null:
+					m.call_backup(),
 		},
 	]
 
@@ -102,6 +117,7 @@ func _unhandled_input(event: InputEvent) -> void:
 
 func _process(delta: float) -> void:
 	if is_open:
+		_refresh()  # live labels: cooldown countdown, land/take-off toggle
 		return
 	# Menu closed: dpad up/down sweeps the FPV camera tilt.
 	var cam := get_viewport().get_camera_3d() as ChaseCamera
@@ -239,8 +255,10 @@ func _refresh() -> void:
 	for i in mini(entries.size(), _rows.size()):
 		var e := entries[i]
 		var cursor: String = "▶" if i == selected else " "
+		# Labels may be a Callable for live text (cooldown countdown, toggles).
+		var label: String = (e.label as Callable).call() if e.label is Callable else e.label
 		if _is_action(e):
-			_rows[i].text = "%s %s" % [cursor, e.label]
+			_rows[i].text = "%s %s" % [cursor, label]
 		else:
 			var options: Array = (e.options as Callable).call()
 			var current: int = (e.getter as Callable).call()

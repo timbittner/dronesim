@@ -27,7 +27,14 @@ loss, and sustained-zero signal loss, an `AirspaceControl` radar ceiling
 (climb too high → countdown → shoot-down), a PUBG-style compass tape,
 editor-placeable `MissionTarget`s (observe / crash) with a `MissionTracker`,
 and a Blender-authored `JammingNode` EW truck.
-15 + 6 + 3 + 8 + 4 headless tests pass.
+**P6 swarm** adds N physics-based follower drones flying formation behind the
+player: a `SwarmManager` roster + slot tables (LINE/V/RING/BOHR), one
+`FollowerPilot` autopilot per follower driving a dedicated `FlightModeFormation`
+from a target pose, a DPad `PadMenu` (formation cycle, auto-land/take-off, call
+backup), and FPV crosshair dispatch (send the nearest follower to observe or
+kamikaze a target). Followers are full drones, so jamming degrades them like the
+player.
+15 + 6 + 3 + 8 + 4 + 12 headless tests pass.
 
 ---
 
@@ -584,6 +591,111 @@ antenna), deliberately low-key. Doubles as the backlog's no-fly-zone primitive.
 | Tracker completes when all cleared | `mission_completed` fires exactly once, only after every target cleared |
 
 Run: `godot --headless --path . scenes/test/mission_test_scene.tscn`
+
+---
+
+## Swarm (P6)
+
+One player drone plus N physics-based followers flying formation. Everything is
+built on the existing single-drone stack: followers are full `DroneController`s
+(rotor-only forces, no magic — so future flight-model work applies to the whole
+swarm), and the player-vs-follower split is just `@export var is_player` (group
+`"player_drone"` for the camera/HUD/recorder; all drones stay in `"drone"` for
+mission targets and radar).
+
+### `scripts/swarm/swarm_manager.gd` — Roster + slot tables
+
+WindField-pattern node (group `"swarm_manager"`, absent = no swarm). Spawns
+`follower_count` drone+pilot pairs (deferred, after the leader joins its group),
+each positioned into its slot **before** `add_child` so the controller captures
+the right `_spawn_transform`. Owns:
+
+- **Slot tables** — `get_slot_offset(i, heading)` returns the world-frame offset
+  for role `i`: `LINE` (abreast, alternating sides), `V` (45° trailing wings),
+  `RING` (evenly spaced circle), `BOHR` (electron-cloud shells 2/8/8/rest, each
+  on a tilted orbital plane, inner shells orbiting faster — `_time`-driven, same
+  controller). Heading-anchored for LINE/V, heading-independent for RING/BOHR.
+- **The radio packet** — `get_leader_state()` returns `{position, velocity,
+  heading}`, the **only** radio-side data in the swarm link. That's the design
+  spine: pilots freeze this on packet loss (jam), but compute slot offsets
+  locally, so a jammed follower keeps orbiting the last-known leader position.
+- **Live tuning** — "Formation Gains" + "Pilot Tuning" export groups pushed into
+  every pilot each physics tick (`apply_gains` + direct assignment), so the
+  remote inspector tunes the swarm while it flies.
+- **Commands** — `dispatch(point, target)` (nearest FORMATION follower),
+  `land_all()`/`take_off_all()` (auto-land incl. a transient player pilot),
+  `call_backup()` (spawn above the pad, `backup_cooldown`-gated),
+  `ground_height(x,z)` (terrain duck-type for auto-land / cruise AGL).
+
+### `scripts/drone/flight_mode_formation.gd` — Follower autopilot
+
+A real `FlightModeBase` computed from a **target pose**, not stick input —
+feeding attitude setpoints into stabilized mode breaks down when the leader
+flies acro, but a position-target autopilot is stable whenever the target path
+is ("player stable ⇒ swarm stable"). Cascade: position error → desired velocity
+(P + integral drift-trim + velocity feed-forward) → desired acceleration →
+thrust-direction up-vector (tilt-clamped by `max_tilt`, which sets terminal
+speed against drag, ~30 m/s at 1.0 rad) → stabilized-style restoring torque;
+altitude PD with vertical feed-forward; heading PD → yaw torque. Two bypasses:
+`landed` (idle throttle on the ground) and `strike` (kamikaze — see below).
+
+### `scripts/swarm/follower_pilot.gd` — Per-follower behavior
+
+One pilot node per follower (individual pilots, not a manager loop, so behaviors
+prime per drone). Behavior enum `FORMATION / HOLD / DISPATCHED / LANDING /
+LANDED / TAKEOFF / DOWN`. Each physics tick it writes the mode's onboard sensors
+(always fresh) and, in FORMATION, the radio-side target (leader state + local
+slot offset + offset-derivative feed-forward). `_receive_leader_state` runs the
+same packet-loss dropout as the player's stick input, freezing the leader packet
+stale. `_on_drone_crashed → DOWN` (a wreck; CALL BACKUP replaces it).
+
+- **Dispatch** — cruise to the target at the dispatch-time AGL (terrain-
+  following, floored at `observe_altitude` so it clears obstacles), then per
+  type: OBSERVE / bare point → hover and loiter, then rejoin; CRASH → **kamikaze
+  strike**.
+- **Kamikaze strike** — a quad can't power-dive a ground target (thrust points
+  up; the naive invert-and-thrust and dive-bomb attempts both tumbled or
+  overshot). So: settle directly overhead (position control bleeds off
+  horizontal speed), then `_mode.strike` cuts throttle to idle and it **free-
+  falls** — gravity is the weapon, impact momentum crashes it, the follower
+  (in group `"drone"`) clears the CRASH target on impact. `lose_signal()` after
+  `STRIKE_TIMEOUT` is only a safety net for a drop that drifts off the mark.
+  Blunt but reliable; see the swarm-mechanics backlog for the wishlist.
+- **Auto-land** — `LANDING` freezes horizontal position + heading and ramps the
+  target down at `descent_rate` to `ground_height`, cuts motors on touchdown
+  (`LANDED`). The player lands too via a transient pilot (`setup_landing`) that
+  saves nothing and hands the sticks back in **stabilized** at
+  `release_altitude` AGL (a ground-level handoff dumped the player into the
+  converging swarm); Triangle reset also releases it.
+
+### `scripts/ui/pad_menu.gd` — DPad command menu
+
+Hand-built `CanvasLayer` (Forza-pit-strip style, lower-left, HUD palette). DPad
+left/right opens; up/down selects; left/right stages a cycle value; Cross applies
+all staged + fires the selected action; Circle aborts. Entries are a data array
+of cycle `{label, options, getter, setter}` or action `{label, kind:"action",
+action}` dicts — labels may be Callables for live text (backup cooldown
+countdown, AUTO-LAND ↔ TAKE OFF toggle). Closed, DPad up/down sweeps the FPV
+cam tilt. Dead while the player is CRASHED.
+
+### Dispatch reticle — `DebugHUD` (P6 additions)
+
+In FPV, `_physics_process` raycasts from the camera through screen center to the
+ground; `_on_reticle_draw` shows a crosshair + distance at the hit, amber with a
+ring when a `MissionTarget`'s radius covers it. Square (`dispatch_follower`)
+sends `SwarmManager.dispatch(hit, target)`. Periodic `[HUD]` console telemetry is
+now behind `console_telemetry` (default off — the FlightRecorder JSONL is the
+record).
+
+### `scripts/test/swarm_test.gd` — Swarm Headless Test Harness (P6)
+
+12 tests: slot-table math per formation, control-law signs, integral drift-trim,
+pilot dropout freeze, velocity feed-forward, pad-menu state machine, dispatch
+selection + per-type aim + arming, backup cooldown, player auto-land handoff,
+and two bounded flight tests (a follower holds/reconverges its slot; auto-land
+settles + takes off; kamikaze impact clears a CRASH target).
+
+Run: `godot --headless --path . scenes/test/swarm_test_scene.tscn`
 
 ---
 

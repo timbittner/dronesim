@@ -6,7 +6,7 @@ A 3D drone flight simulator built in Godot 4.7 / GDScript, iterating toward a
 drone swarm simulator with realistic flight physics, autonomous routing,
 weather, and threat simulation.
 
-**Current phase:** P5 complete. Shipped so far:
+**Current phase:** P6 complete. Shipped so far:
 - **P2** — per-rotor thrust vectoring, assisted flight modes (altitude
   hold + brake), crash / signal loss, terrain-aware wind.
 - **P3** — project health: GitHub upstream + CI
@@ -18,6 +18,12 @@ weather, and threat simulation.
 - **P5** — gamification: analog-FPV PS2 post/static shader, a unified
   `SignalField` scalar (boundary belt + jammers), `AirspaceControl` radar
   ceiling, compass tape, `MissionTarget`s + `MissionTracker`, `JammingNode`.
+- **P6** — swarm: N physics-based followers (`SwarmManager` + per-drone
+  `FollowerPilot`), a dedicated `FlightModeFormation` autopilot (LINE/V/RING/
+  BOHR slots), a DPad command menu (`PadMenu`: formation, auto-land/take-off,
+  call-backup), FPV crosshair dispatch (Square → nearest follower kamikazes /
+  observes), and FPV cam tilt. Followers are full `DroneController`s — jamming
+  degrades them (frozen radio-side leader state) just like the player.
 
 **`PROJECT_SUMMARY.md` is the deep-dive reference** — architecture, per-system
 internals, and all tuning parameters live there. This file stays a lean guide:
@@ -62,9 +68,13 @@ scripts/
     flight_mode_acro.gd          Idle-floor throttle + expo differential, no auto-level
     flight_mode_stabilized.gd    PD auto-level + rate mode
     flight_mode_altitude_hold.gd Post-compute collective filter (assist, not a mode)
+    flight_mode_formation.gd     Swarm-follower autopilot: pos/alt/heading + kamikaze strike (P6)
     brake_assist.gd              Rotor-thrust tilt brake (assist, not a mode)
     drone_body_mesh.gd           Procedural body (RETIRED — kept for reference)
     debug_axes.gd                RGB orientation arrows
+  swarm/
+    swarm_manager.gd             Spawns followers, slot tables, dispatch/land/backup (P6)
+    follower_pilot.gd            One autopilot per follower: behavior state + radio split (P6)
   camera/
     chase_camera.gd              FPV + chase camera (FPV rotation smoothed)
   environment/
@@ -81,13 +91,15 @@ scripts/
     mission_tracker.gd           Fires mission_completed when all cleared (P5)
     jamming_node.gd              JammingNode EW truck, group "jammers" (P5)
   ui/
-    debug_hud.gd                 Telemetry + wind arrow + compass + banners + post shader
+    debug_hud.gd                 Telemetry + wind arrow + compass + banners + post shader + dispatch reticle (P6)
+    pad_menu.gd                  DPad swarm command menu, Forza-strip style (P6)
   test/
     flight_mode_test.gd          15 headless tests
     wind_field_test.gd           6 headless wind-field tests
     flight_recorder_test.gd      3 headless telemetry tests
     osm_terrain_test.gd          8 headless map/terrain tests (P4)
     mission_test.gd              4 headless mission/signal tests (P5)
+    swarm_test.gd                12 headless swarm tests (P6)
     mock_hill_terrain.gd         Deterministic terrain stand-in for wind tests
 assets/
   shaders/ps2_post.gdshader      PS2 look + analog signal static, both views (P5)
@@ -148,6 +160,18 @@ easy to break, kept here as terse warnings:
   All P5 nodes follow the WindField pattern (group-registered, lazily
   resolved, absent node = neutral). Detail: `PROJECT_SUMMARY.md →
   Gamification (P5)`.
+- **Swarm (P6):** followers are full `DroneController`s (rotor-only, no magic —
+  future flight-model work applies to the whole swarm). The **only** radio-side
+  data is `SwarmManager.get_leader_state()` (leader pos/vel/heading); a jammed
+  follower freezes that packet stale, mirroring the player's frozen sticks,
+  while slot-offset math runs follower-side on its own clock (orbits keep
+  turning through a jam). `SwarmManager` is a WindField-pattern node (group
+  `"swarm_manager"`, absent = no swarm). `FlightModeFormation` is a real
+  `FlightModeBase` computed from a target pose (NOT stabilized-mode reuse —
+  that breaks at acro speeds). Kamikaze strike is a free-fall (idle throttle
+  onto a settled-overhead target) — a quad can't power-dive a ground target,
+  so gravity is the weapon; it's the same rotor-only `lose_signal()` only as a
+  botched-drop safety net. Detail: `PROJECT_SUMMARY.md → Swarm (P6)`.
 
 ### Extension Points
 
@@ -258,6 +282,7 @@ The `_rotor_positions` array order is `[FL, FR, BL, BR]` and the mixer output
 | DPad ▲/▼ | Hold / Press | FPV camera tilt sweep (−30°…+60°). Menu open: select entry |
 | Cross | Press | Menu open: apply all staged changes and close |
 | Circle | Press | Menu open: abort — close, discard staged changes |
+| Square | Press | FPV only: dispatch the nearest formation follower at the reticle's ground point (keyboard: F) |
 | Mousewheel | Scroll | Zoom 3PV chase distance (10% steps, no effect in FPV) |
 
 While CRASHED only Triangle (reset) and R1 (camera toggle) are handled — L1,

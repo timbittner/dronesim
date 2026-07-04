@@ -22,6 +22,11 @@ extends Node3D
 @export var altitude_offset: float = 0.0
 ## BOHR orbital angular speed, rad/s.
 @export var bohr_speed: float = 1.2
+## Seconds between backup spawns (menu: CALL BACKUP).
+@export var backup_cooldown: float = 15.0
+## Terrain node with get_height(x, z) — auto-land ground reference (same
+## duck-typed contract as WindField's). Missing node = ground at y 0.
+@export var terrain_path: NodePath = NodePath("../Terrain")
 
 enum Formation { LINE, V, RING, BOHR }
 
@@ -41,6 +46,21 @@ enum Formation { LINE, V, RING, BOHR }
 ## Max thrust-direction tilt, rad — sets the terminal speed against drag
 ## (v = g·tan(max_tilt)·mass/drag_c ≈ 30 m/s at 1.0), not just agility.
 @export var max_tilt: float = 1.0
+
+## Pushed into every pilot each physics tick, like the gains — pilots are
+## built in code, so these are their only inspector knobs.
+@export_group("Pilot Tuning")
+## Dispatched runs cruise at dispatch-time AGL until this close (horizontal
+## m) to the goal, then descend/dive onto it.
+@export var dive_radius: float = 12.0
+## Hover height above OBSERVE dispatch points / bare ground points, m.
+@export var observe_altitude: float = 5.0
+## Seconds a dispatched drone loiters over a bare point before rejoining.
+@export var loiter_time: float = 5.0
+## Auto-land descent rate, m/s (keep well under the 4 m/s crash threshold).
+@export var descent_rate: float = 1.5
+## Player take-off: hand the sticks back this many m above the ground.
+@export var release_altitude: float = 5.0
 
 const DRONE_SCENE: PackedScene = preload("res://scenes/drone/drone.tscn")
 
@@ -62,27 +82,142 @@ func _physics_process(delta: float) -> void:
 	_time += delta
 	for pilot in pilots:
 		pilot.apply_gains(pos_p_gain, pos_i_gain, vel_p_gain, max_speed, max_tilt)
+		pilot.dive_radius = dive_radius
+		pilot.observe_altitude = observe_altitude
+		pilot.loiter_time = loiter_time
+		pilot.descent_rate = descent_rate
 
 
 func _spawn_followers() -> void:
 	var leader := _get_leader()
 	for i in range(follower_count):
-		var drone := DRONE_SCENE.instantiate() as DroneController
-		drone.is_player = false
-		drone.name = "Follower%d" % (i + 1)
-		# Position BEFORE add_child: the controller captures _spawn_transform
-		# (its reset target) in _ready, which fires on entering the tree.
 		var slot := get_slot_position(i) if leader != null \
 				else global_position + Vector3(i * spacing, altitude_offset, 0)
-		drone.position = to_local(slot)
-		add_child(drone)
-		var pilot := FollowerPilot.new()
-		pilot.name = "Pilot%d" % (i + 1)
-		add_child(pilot)
-		pilot.setup(drone, self, i)
-		pilots.append(pilot)
+		_spawn_one(i, slot)
 	print("[Swarm] spawned %d followers (%s formation)"
 			% [follower_count, Formation.keys()[formation]])
+
+
+func _spawn_one(i: int, spawn_pos: Vector3) -> FollowerPilot:
+	var drone := DRONE_SCENE.instantiate() as DroneController
+	drone.is_player = false
+	drone.name = "Follower%d" % (i + 1)
+	# Position BEFORE add_child: the controller captures _spawn_transform
+	# (its reset target) in _ready, which fires on entering the tree.
+	drone.position = to_local(spawn_pos)
+	add_child(drone)
+	var pilot := FollowerPilot.new()
+	pilot.name = "Pilot%d" % (i + 1)
+	add_child(pilot)
+	pilot.setup(drone, self, i)
+	pilots.append(pilot)
+	return pilot
+
+
+## Dispatch the FORMATION follower nearest to `point` at it (P6 step 4).
+## Returns the chosen pilot, or null if the whole swarm is busy/down.
+func dispatch(point: Vector3, target: MissionTarget) -> FollowerPilot:
+	var best: FollowerPilot = null
+	var best_d := INF
+	for pilot in pilots:
+		if pilot.behavior != FollowerPilot.Behavior.FORMATION:
+			continue
+		var d: float = pilot.drone.global_position.distance_to(point)
+		if d < best_d:
+			best_d = d
+			best = pilot
+	if best == null:
+		print("[Swarm] dispatch refused — no follower in formation")
+		return null
+	best.dispatch(point, target)
+	print("[Swarm] %s dispatched (%s)" % [best.drone.name,
+			"target" if target != null else "point"])
+	return best
+
+
+var _backup_ready_at: float = 0.0
+var _terrain: Node = null
+var _terrain_searched: bool = false
+## Transient player auto-land pilot — exists only between AUTO-LAND and
+## TAKE OFF / Triangle reset (it frees itself on release).
+var _player_pilot: FollowerPilot = null
+
+
+## Spawn a replacement follower on the pad (this node's position, ground
+## start) — the formation mode flies it to its slot on its own. Cooldown-gated.
+func call_backup() -> bool:
+	if backup_cooldown_left() > 0.0:
+		print("[Swarm] backup on cooldown — %.0fs left" % backup_cooldown_left())
+		return false
+	_backup_ready_at = _time + backup_cooldown
+	var i := pilots.size()
+	# 5 m above the pad — spawning ON it wedged drones against the platform.
+	_spawn_one(i, global_position + Vector3.UP * 5.0)
+	follower_count = maxi(follower_count, i + 1)  # keep RING/BOHR slot math consistent
+	print("[Swarm] backup follower launched from pad (%d in swarm)" % pilots.size())
+	return true
+
+
+## Seconds until CALL BACKUP is available again (0 = ready) — menu countdown.
+func backup_cooldown_left() -> float:
+	return maxf(0.0, _backup_ready_at - _time)
+
+
+## Terrain height under (x, z) for auto-land; y 0 without a terrain node.
+func ground_height(x: float, z: float) -> float:
+	if not _terrain_searched:
+		_terrain_searched = true
+		var t := get_node_or_null(terrain_path)
+		if t != null and t.has_method("get_height"):
+			_terrain = t
+	if _terrain == null:
+		return 0.0
+	return _terrain.get_height(x, z)
+
+
+## True while any part of the swarm (player included) is landing or parked —
+## drives the menu's AUTO-LAND ↔ TAKE OFF toggle.
+func swarm_landing() -> bool:
+	if is_instance_valid(_player_pilot):
+		return true
+	for pilot in pilots:
+		if pilot.behavior == FollowerPilot.Behavior.LANDING \
+				or pilot.behavior == FollowerPilot.Behavior.LANDED:
+			return true
+	return false
+
+
+## AUTO-LAND: everything lands in place — formation/holding followers AND the
+## player (a transient pilot takes the sticks; Triangle reset gives them back).
+## ponytail: dispatched runners finish their mission first and then rejoin
+## (they hover at their slot over the landed leader) — land-on-rejoin if that
+## ever grates.
+func land_all() -> void:
+	for pilot in pilots:
+		if pilot.behavior == FollowerPilot.Behavior.FORMATION \
+				or pilot.behavior == FollowerPilot.Behavior.HOLD:
+			pilot.land()
+	var leader := _get_leader()
+	if leader != null and not leader.is_crashed() and not is_instance_valid(_player_pilot):
+		_player_pilot = FollowerPilot.new()
+		_player_pilot.name = "PlayerAutoLand"
+		_player_pilot.descent_rate = descent_rate
+		_player_pilot.release_altitude = release_altitude
+		add_child(_player_pilot)
+		_player_pilot.setup_landing(leader, self)
+	print("[Swarm] AUTO-LAND — swarm landing in place")
+
+
+## TAKE OFF: landed followers fly back to their slots; the player is flown up
+## to release_altitude first, then handed the sticks in stabilized (the pilot
+## frees itself at the handoff — no reference to clear).
+func take_off_all() -> void:
+	for pilot in pilots:
+		pilot.takeoff()
+	if is_instance_valid(_player_pilot) \
+			and _player_pilot.behavior != FollowerPilot.Behavior.TAKEOFF:
+		_player_pilot.begin_takeoff()
+	print("[Swarm] TAKE OFF — resuming formation")
 
 
 func _get_leader() -> DroneController:
