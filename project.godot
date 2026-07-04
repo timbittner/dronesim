@@ -22,11 +22,6 @@ window/stretch/aspect="expand"
 
 [filesystem]
 
-; drone_parts.blend / jammer.blend are checked-in reference sources (see
-; AGENTS.md); we always work from their manually-exported GLBs, never Godot's
-; live Blender import. Without this, CI (no Blender binary) fails to import the
-; .blend files and aborts the whole reimport batch, silently leaving the
-; sibling GLBs unimported too — which breaks every preload() of them.
 import/blender/enabled=false
 
 [input]

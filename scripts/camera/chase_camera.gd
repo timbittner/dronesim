@@ -7,7 +7,8 @@ extends Camera3D
 ##       jitter without the position-drift bugs of a full spring arm.
 ## Chase: follows behind based on drone yaw only, looks directly at drone.
 
-@export var target_path: NodePath = ""  # Set to the drone node
+## Explicit drone override; empty = lazily resolve group "player_drone" (P6).
+@export var target_path: NodePath = ""
 @export var chase_distance: float = 2.2
 @export var chase_height: float = 0.9
 @export var follow_speed: float = 8.0
@@ -24,17 +25,23 @@ var _drone_controller: DroneController
 
 func _ready() -> void:
 	if not target_path.is_empty():
-		_target = get_node(target_path)
-	if _target:
-		_drone_controller = _target as DroneController
-		if _drone_controller:
-			_drone_controller.fpv_toggled.connect(_on_fpv_toggled)
+		_set_target(get_node(target_path))
 	fov = 90.0  # FPV fov
+
+
+func _set_target(node: Node) -> void:
+	_target = node as Node3D
+	_drone_controller = _target as DroneController
+	if _drone_controller:
+		_drone_controller.fpv_toggled.connect(_on_fpv_toggled)
 
 
 func _physics_process(delta: float) -> void:
 	if _target == null:
-		return
+		# Lazy player-drone discovery, same pattern as WindField consumers.
+		_set_target(get_tree().get_first_node_in_group("player_drone"))
+		if _target == null:
+			return
 
 	if _fpv:
 		_update_fpv(delta)

@@ -6,6 +6,7 @@ extends CanvasLayer
 ## Also shows a world-axis gizmo (Minecraft F3-style) and drone XYZ in bottom-left.
 ## Prints a one-line telemetry summary every 60 frames for MCP debug capture.
 
+## Explicit drone override; the fallback is group "player_drone" (P6).
 @export var drone_path: NodePath = NodePath("../Drone")
 @export var print_interval: int = 60  # frames between console telemetry prints
 
@@ -95,7 +96,7 @@ var _ps2_rect: ColorRect  # PS2 look + signal static, always on
 
 
 func _ready() -> void:
-	_drone = get_node_or_null(drone_path) as DroneController
+	_drone = _find_player_drone()
 	_build_ui()
 	_gizmo_font = ThemeDB.fallback_font
 	_gizmo_font_size = ThemeDB.fallback_font_size
@@ -110,9 +111,16 @@ func _connect_drone_signals() -> void:
 	_drone.fpv_toggled.connect(_on_fpv_toggled)
 
 
+func _find_player_drone() -> DroneController:
+	var d := get_node_or_null(drone_path) as DroneController
+	if d == null:
+		d = get_tree().get_first_node_in_group("player_drone") as DroneController
+	return d
+
+
 func _process(delta: float) -> void:
 	if _drone == null:
-		_drone = get_node_or_null(drone_path) as DroneController
+		_drone = _find_player_drone()
 		if _drone == null:
 			return
 		_connect_drone_signals()

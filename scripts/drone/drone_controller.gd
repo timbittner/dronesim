@@ -18,6 +18,14 @@ signal crash_detected
 ## new one began (FlightRecorder rotates its log file on this).
 signal drone_reset
 
+# --- Pilot ---
+## True for the one drone the player flies (joins group "player_drone" —
+## resolved by camera/HUD/recorder). False for swarm followers (P6): stick
+## input and button handling are skipped entirely; a FollowerPilot drives the
+## drone through its flight mode instead. The physics pipeline below is
+## identical either way.
+@export var is_player: bool = true
+
 # --- Thrust ---
 @export var max_thrust: float = 17.5  # Newtons per rotor (35% of previous 50.0)
 
@@ -133,6 +141,8 @@ var _rotor_positions: Array[Vector3] = [
 
 func _ready() -> void:
 	add_to_group("drone")  # resolved by mission targets / tracker (P5)
+	if is_player:
+		add_to_group("player_drone")  # resolved by camera / HUD / recorder (P6)
 	_spawn_transform = global_transform
 	gravity_scale = 1.0
 	angular_damp = 0.0
@@ -256,6 +266,8 @@ func _first_mesh_instance(node: Node) -> MeshInstance3D:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if not is_player:
+		return
 	# While CRASHED the signal is lost: only reset (Triangle) and the camera
 	# toggle (R1 — the camera belongs to the pilot, not the dead drone) work.
 	if event.is_action_pressed("toggle_flight_mode") and _state == State.FLYING:
@@ -304,7 +316,7 @@ func _physics_process(delta: float) -> void:
 	# AGENTS.md "Known Issues" for detail). Polling once per physics tick
 	# catches it a tick later even if the discrete event was missed.
 	# reset() is idempotent, so double-firing in the same frame is harmless.
-	if Input.is_action_just_pressed("reset_drone"):
+	if is_player and Input.is_action_just_pressed("reset_drone"):
 		reset()
 
 
@@ -360,6 +372,8 @@ func _enter_crashed() -> void:
 
 
 func _read_inputs() -> void:
+	if not is_player:
+		return  # followers: the pilot drives the flight mode's target directly
 	_throttle_input = Input.get_action_strength("throttle_up") - Input.get_action_strength("throttle_down")
 	_yaw_input = Input.get_action_strength("yaw_right") - Input.get_action_strength("yaw_left")
 	_pitch_input = Input.get_action_strength("pitch_backward") - Input.get_action_strength("pitch_forward")

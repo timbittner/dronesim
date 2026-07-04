@@ -6,24 +6,30 @@ extends Node3D
 ## the flight/crash logic (cutting rotors, ignoring inputs) — what the world
 ## does in response lives here.
 
-@export var drone_path: NodePath = NodePath("../Drone")
-
-var _drone: DroneController
 var _dust: CPUParticles3D
+## Drones whose crash_detected is already connected (P6: followers spawn at
+## runtime, so the group is re-scanned each tick — a handful of nodes, cheap).
+var _connected: Dictionary = {}
 
 
 func _ready() -> void:
 	_dust = _make_dust_cloud()
 	add_child(_dust)
-	_drone = get_node_or_null(drone_path) as DroneController
-	if _drone:
-		_drone.crash_detected.connect(_on_crash_detected)
 
 
-func _on_crash_detected() -> void:
+func _physics_process(_delta: float) -> void:
+	for drone in get_tree().get_nodes_in_group("drone"):
+		if not _connected.has(drone):
+			_connected[drone] = true
+			drone.crash_detected.connect(_on_crash_detected.bind(drone))
+
+
+func _on_crash_detected(drone: DroneController) -> void:
 	# crash_detected is emitted synchronously from the crash, so the drone is
 	# still at the impact point.
-	_dust.global_position = _drone.global_position
+	# ponytail: one shared dust node — simultaneous crashes share a burst;
+	# per-drone emitters if that ever reads wrong.
+	_dust.global_position = drone.global_position
 	_dust.restart()
 
 
