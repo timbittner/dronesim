@@ -626,6 +626,14 @@ the right `_spawn_transform`. Owns:
   `land_all()`/`take_off_all()` (auto-land incl. a transient player pilot),
   `call_backup()` (spawn above the pad, `backup_cooldown`-gated),
   `ground_height(x,z)` (terrain duck-type for auto-land / cruise AGL).
+- **Ground start (P6.5)** — the first 8 followers (and the player) spawn
+  parked on the 2×2 pad (`PAD_CELLS`/`pad_slot()`); beyond that they spawn
+  airborne straight in their formation slot (no pad room left). TAKE OFF
+  launches everyone; `take_off_all()` first calls `_reassign_slots()`, a
+  greedy nearest-(drone, slot) match within the taking-off group so a mass
+  launch doesn't route two drones to opposite sides of the ring and crash
+  them into each other mid-swap (best-effort, not a guaranteed-optimal
+  assignment).
 
 ### `scripts/drone/flight_mode_formation.gd` — Follower autopilot
 
@@ -653,14 +661,13 @@ stale. `_on_drone_crashed → DOWN` (a wreck; CALL BACKUP replaces it).
   following, floored at `observe_altitude` so it clears obstacles), then per
   type: OBSERVE / bare point → hover and loiter, then rejoin; CRASH → **kamikaze
   strike**.
-- **Kamikaze strike** — a quad can't power-dive a ground target (thrust points
-  up; the naive invert-and-thrust and dive-bomb attempts both tumbled or
-  overshot). So: settle directly overhead (position control bleeds off
-  horizontal speed), then `_mode.strike` cuts throttle to idle and it **free-
-  falls** — gravity is the weapon, impact momentum crashes it, the follower
-  (in group `"drone"`) clears the CRASH target on impact. `lose_signal()` after
-  `STRIKE_TIMEOUT` is only a safety net for a drop that drifts off the mark.
-  Blunt but reliable; see the swarm-mechanics backlog for the wishlist.
+- **Kamikaze strike (powered dive, P6.5)** — once within `dive_radius` of a
+  live CRASH target, `_mode.strike` aims the body-up vector straight at
+  `strike_target` (refreshed live while the target exists) and holds full
+  collective — no tilt clamp, deliberately reckless. Impact momentum clears
+  the CRASH target on hit; `lose_signal()` after `STRIKE_TIMEOUT` remains a
+  safety net for a dive that skims past instead of connecting. Still
+  rotor-only — thrust is the weapon, not an applied impulse.
 - **Auto-land** — `LANDING` freezes horizontal position + heading and ramps the
   target down at `descent_rate` to `ground_height`, cuts motors on touchdown
   (`LANDED`). The player lands too via a transient pilot (`setup_landing`) that
@@ -676,7 +683,9 @@ all staged + fires the selected action; Circle aborts. Entries are a data array
 of cycle `{label, options, getter, setter}` or action `{label, kind:"action",
 action}` dicts — labels may be Callables for live text (backup cooldown
 countdown, AUTO-LAND ↔ TAKE OFF toggle). Closed, DPad up/down sweeps the FPV
-cam tilt. Dead while the player is CRASHED.
+cam tilt. Dead while the player is CRASHED. **HUD submenu (P6.5)** — one entry
+descends into a nested list (LOG/TELEMETRY/WIND/GIZMO/AXES toggles); BACK pops.
+A small `_stack` of parent-level frames is the only new state.
 
 ### Dispatch reticle — `DebugHUD` (P6 additions)
 
@@ -685,15 +694,21 @@ ground; `_on_reticle_draw` shows a crosshair + distance at the hit, amber with a
 ring when a `MissionTarget`'s radius covers it. Square (`dispatch_follower`)
 sends `SwarmManager.dispatch(hit, target)`. Periodic `[HUD]` console telemetry is
 now behind `console_telemetry` (default off — the FlightRecorder JSONL is the
-record).
+record). **Dispatch marker (P6.5)** — a cyan triangle tracks any DISPATCHED
+follower (apex up/down by altitude relative to the player), pinned to the
+screen edge when off-view or behind the camera, labeled with its follower
+number. **On-screen event log (P6.5)** — `DebugHUD.log_line()` mirrors
+`SwarmManager._log()`'s console prints to a bottom-right panel (last 8 lines)
+so web builds without a console can see swarm/dispatch activity.
 
 ### `scripts/test/swarm_test.gd` — Swarm Headless Test Harness (P6)
 
-12 tests: slot-table math per formation, control-law signs, integral drift-trim,
-pilot dropout freeze, velocity feed-forward, pad-menu state machine, dispatch
-selection + per-type aim + arming, backup cooldown, player auto-land handoff,
-and two bounded flight tests (a follower holds/reconverges its slot; auto-land
-settles + takes off; kamikaze impact clears a CRASH target).
+13 tests: slot-table math per formation, control-law signs, integral drift-trim,
+pilot dropout freeze, velocity feed-forward, pad-menu state machine (incl. HUD
+submenu descend/back), dispatch selection + per-type aim + powered-dive
+arming, backup cooldown, player auto-land handoff, pad-slot spacing, and
+three bounded flight tests (a follower ground-starts then holds/reconverges;
+auto-land settles + takes off; kamikaze impact clears a CRASH target).
 
 Run: `godot --headless --path . scenes/test/swarm_test_scene.tscn`
 

@@ -6,7 +6,7 @@ A 3D drone flight simulator built in Godot 4.7 / GDScript, iterating toward a
 drone swarm simulator with realistic flight physics, autonomous routing,
 weather, and threat simulation.
 
-**Current phase:** P6 complete. Shipped so far:
+**Current phase:** P6.5 complete. Shipped so far:
 - **P2** — per-rotor thrust vectoring, assisted flight modes (altitude
   hold + brake), crash / signal loss, terrain-aware wind.
 - **P3** — project health: GitHub upstream + CI
@@ -24,6 +24,10 @@ weather, and threat simulation.
   call-backup), FPV crosshair dispatch (Square → nearest follower kamikazes /
   observes), and FPV cam tilt. Followers are full `DroneController`s — jamming
   degrades them (frozen radio-side leader state) just like the player.
+- **P6.5** — QoL: swarm + player start landed on the launch pad (menu TAKE OFF
+  launches everyone), a powered-dive kamikaze (thrust at the target, not
+  free-fall), a HUD dispatch marker, an on-screen event log, and a HUD
+  submenu (log/telemetry/wind/gizmo/axes toggles).
 
 **`PROJECT_SUMMARY.md` is the deep-dive reference** — architecture, per-system
 internals, and all tuning parameters live there. This file stays a lean guide:
@@ -91,15 +95,15 @@ scripts/
     mission_tracker.gd           Fires mission_completed when all cleared (P5)
     jamming_node.gd              JammingNode EW truck, group "jammers" (P5)
   ui/
-    debug_hud.gd                 Telemetry + wind arrow + compass + banners + post shader + dispatch reticle (P6)
-    pad_menu.gd                  DPad swarm command menu, Forza-strip style (P6)
+    debug_hud.gd                 Telemetry + wind arrow + compass + banners + post shader + dispatch reticle/marker + event log (P6/P6.5)
+    pad_menu.gd                  DPad swarm command menu + HUD toggle submenu (P6/P6.5)
   test/
     flight_mode_test.gd          15 headless tests
     wind_field_test.gd           6 headless wind-field tests
     flight_recorder_test.gd      3 headless telemetry tests
     osm_terrain_test.gd          8 headless map/terrain tests (P4)
     mission_test.gd              4 headless mission/signal tests (P5)
-    swarm_test.gd                12 headless swarm tests (P6)
+    swarm_test.gd                13 headless swarm tests (P6/P6.5)
     mock_hill_terrain.gd         Deterministic terrain stand-in for wind tests
 assets/
   shaders/ps2_post.gdshader      PS2 look + analog signal static, both views (P5)
@@ -168,10 +172,12 @@ easy to break, kept here as terse warnings:
   turning through a jam). `SwarmManager` is a WindField-pattern node (group
   `"swarm_manager"`, absent = no swarm). `FlightModeFormation` is a real
   `FlightModeBase` computed from a target pose (NOT stabilized-mode reuse —
-  that breaks at acro speeds). Kamikaze strike is a free-fall (idle throttle
-  onto a settled-overhead target) — a quad can't power-dive a ground target,
-  so gravity is the weapon; it's the same rotor-only `lose_signal()` only as a
-  botched-drop safety net. Detail: `PROJECT_SUMMARY.md → Swarm (P6)`.
+  that breaks at acro speeds). Kamikaze strike (P6.5) is a powered dive — full
+  collective aimed straight at the target, no tilt clamp — with the same
+  rotor-only `lose_signal()` as a botched-dive safety net. The swarm + player
+  start **landed** on the pad (P6.5); menu TAKE OFF launches everyone, and
+  Triangle re-parks only the player (followers are untouched by reset).
+  Detail: `PROJECT_SUMMARY.md → Swarm (P6)`.
 
 ### Extension Points
 
