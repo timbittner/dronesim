@@ -76,6 +76,13 @@ var _reticle_target: MissionTarget = null
 var _swarm: Node = null
 var _swarm_searched: bool = false
 
+# On-screen event log (P6.5): last few swarm/mission lines, bottom-right —
+# web builds have no console. Fed by SwarmManager._log via group "debug_hud".
+const LOG_MAX_LINES: int = 8
+var show_log: bool = true
+var _log_lines: PackedStringArray = []
+var _log_label: Label
+
 var _gizmo_panel: ColorRect
 var _gizmo_canvas: Control
 var _coord_label: Label
@@ -111,6 +118,7 @@ var _ps2_rect: ColorRect  # PS2 look + signal static, always on
 
 
 func _ready() -> void:
+	add_to_group("debug_hud")
 	_drone = _find_player_drone()
 	_build_ui()
 	_gizmo_font = ThemeDB.fallback_font
@@ -516,6 +524,22 @@ func _build_ui() -> void:
 	_reticle_canvas.draw.connect(_on_reticle_draw)
 	add_child(_reticle_canvas)
 
+	# Event log, bottom-right corner — right-aligned, grows upward.
+	_log_label = Label.new()
+	_log_label.add_theme_font_size_override("font_size", 12)
+	_log_label.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	_log_label.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	_log_label.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	_log_label.offset_left = -420.0
+	_log_label.offset_right = -8.0
+	_log_label.offset_bottom = -8.0
+	_log_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_log_label.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
+	_log_label.add_theme_color_override("font_color", Color(0.35, 1.0, 0.35))
+	_log_label.add_theme_color_override("font_outline_color", Color(0, 0, 0))
+	_log_label.add_theme_constant_override("outline_size", 2)
+	add_child(_log_label)
+
 	# Mission success banner, centered just above the compass strip.
 	_mission_label = Label.new()
 	_mission_label.text = "MISSION SUCCESS"
@@ -558,6 +582,15 @@ func _build_ui() -> void:
 	_radar_label.offset_top = 70.0
 	_radar_label.visible = false
 	add_child(_radar_label)
+
+
+## Append a line to the on-screen event log (bottom-right, last 8 lines).
+func log_line(msg: String) -> void:
+	_log_lines.append(msg)
+	while _log_lines.size() > LOG_MAX_LINES:
+		_log_lines.remove_at(0)
+	_log_label.text = "\n".join(_log_lines)
+	_log_label.visible = show_log
 
 
 func _on_gizmo_draw() -> void:

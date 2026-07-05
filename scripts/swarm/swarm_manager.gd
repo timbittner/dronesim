@@ -69,6 +69,21 @@ var pilots: Array[FollowerPilot] = []
 var _leader: DroneController = null
 var _leader_searched: bool = false
 var _time: float = 0.0
+var _hud: Node = null
+var _hud_searched: bool = false
+
+
+## Console print + on-screen event log (group "debug_hud", lazily resolved —
+## absent HUD = console only, same convention as every other lookup here).
+func _log(msg: String) -> void:
+	print(msg)
+	if not _hud_searched:
+		_hud_searched = true
+		var h := get_tree().get_first_node_in_group("debug_hud")
+		if h != null and h.has_method("log_line"):
+			_hud = h
+	if _hud != null:
+		_hud.log_line(msg)
 
 
 func _ready() -> void:
@@ -94,7 +109,7 @@ func _spawn_followers() -> void:
 		var slot := get_slot_position(i) if leader != null \
 				else global_position + Vector3(i * spacing, altitude_offset, 0)
 		_spawn_one(i, slot)
-	print("[Swarm] spawned %d followers (%s formation)"
+	_log("[Swarm] spawned %d followers (%s formation)"
 			% [follower_count, Formation.keys()[formation]])
 
 
@@ -127,10 +142,10 @@ func dispatch(point: Vector3, target: MissionTarget) -> FollowerPilot:
 			best_d = d
 			best = pilot
 	if best == null:
-		print("[Swarm] dispatch refused — no follower in formation")
+		_log("[Swarm] dispatch refused — no follower in formation")
 		return null
 	best.dispatch(point, target)
-	print("[Swarm] %s dispatched (%s)" % [best.drone.name,
+	_log("[Swarm] %s dispatched (%s)" % [best.drone.name,
 			"target" if target != null else "point"])
 	return best
 
@@ -147,14 +162,14 @@ var _player_pilot: FollowerPilot = null
 ## start) — the formation mode flies it to its slot on its own. Cooldown-gated.
 func call_backup() -> bool:
 	if backup_cooldown_left() > 0.0:
-		print("[Swarm] backup on cooldown — %.0fs left" % backup_cooldown_left())
+		_log("[Swarm] backup on cooldown — %.0fs left" % backup_cooldown_left())
 		return false
 	_backup_ready_at = _time + backup_cooldown
 	var i := pilots.size()
 	# 5 m above the pad — spawning ON it wedged drones against the platform.
 	_spawn_one(i, global_position + Vector3.UP * 5.0)
 	follower_count = maxi(follower_count, i + 1)  # keep RING/BOHR slot math consistent
-	print("[Swarm] backup follower launched from pad (%d in swarm)" % pilots.size())
+	_log("[Swarm] backup follower launched from pad (%d in swarm)" % pilots.size())
 	return true
 
 
@@ -204,7 +219,7 @@ func land_all() -> void:
 		_player_pilot.release_altitude = release_altitude
 		add_child(_player_pilot)
 		_player_pilot.setup_landing(leader, self)
-	print("[Swarm] AUTO-LAND — swarm landing in place")
+	_log("[Swarm] AUTO-LAND — swarm landing in place")
 
 
 ## TAKE OFF: landed followers fly back to their slots; the player is flown up
@@ -216,7 +231,7 @@ func take_off_all() -> void:
 	if is_instance_valid(_player_pilot) \
 			and _player_pilot.behavior != FollowerPilot.Behavior.TAKEOFF:
 		_player_pilot.begin_takeoff()
-	print("[Swarm] TAKE OFF — resuming formation")
+	_log("[Swarm] TAKE OFF — resuming formation")
 
 
 func _get_leader() -> DroneController:

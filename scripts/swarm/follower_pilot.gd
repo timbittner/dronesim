@@ -281,7 +281,7 @@ func _fly_dispatch(delta: float) -> void:
 		_mode.strike = true
 		_strike_time += delta
 		if _strike_time > STRIKE_TIMEOUT and not drone.is_crashed():
-			print("[%s] kamikaze — link cut" % drone.name)
+			_log("[%s] kamikaze — link cut" % drone.name)
 			drone.lose_signal()
 		return
 
@@ -346,3 +346,12 @@ func _receive_leader_state(quality: float, delta: float) -> void:
 
 func _on_drone_crashed() -> void:
 	set_behavior(Behavior.DOWN)
+	_log("[Swarm] %s down" % drone.name)
+
+
+## Route through the manager's console + on-screen log; bare print without one.
+func _log(msg: String) -> void:
+	if manager != null and manager.has_method("_log"):
+		manager._log(msg)
+	else:
+		print(msg)
