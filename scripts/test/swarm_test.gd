@@ -375,9 +375,9 @@ func test_pad_menu_navigation() -> bool:
 # ---------------------------------------------------------------------------
 # Dispatch (P6 step 4): the manager picks the NEAREST formation follower, busy
 # followers are skipped, an all-busy swarm refuses; the pilot aims a hover
-# height above bare points but straight AT a live CRASH target (kamikaze), and
-# rejoins the formation once its target reads cleared. No physics settling —
-# positions are teleported and checked synchronously.
+# height above bare points but commits to a powered terminal dive near a live
+# CRASH target, and rejoins the formation once its target reads cleared. No
+# physics settling — positions are teleported and checked synchronously.
 # ---------------------------------------------------------------------------
 func test_dispatch_selection_and_aim() -> bool:
 	print("[TEST] --- test_dispatch_selection_and_aim ---")
@@ -407,8 +407,8 @@ func test_dispatch_selection_and_aim() -> bool:
 	var hover_ok: bool = p1._dispatch_aim() \
 			.is_equal_approx(point + Vector3.UP * p1.observe_altitude)
 
-	# Live CRASH target → hold station overhead at the dispatch-time cruise
-	# altitude until settled, then _fly_dispatch arms the free-fall strike.
+	# Live CRASH target → cruise at dispatch-time AGL until close enough, then
+	# _fly_dispatch arms the powered terminal strike.
 	var t := MissionTarget.new()
 	t.type = MissionTarget.Type.CRASH
 	add_child(t)
@@ -416,13 +416,11 @@ func test_dispatch_selection_and_aim() -> bool:
 	p0.drone.global_position = Vector3(0, 20, 0)  # dispatch altitude to hold
 	p0.dispatch(t.global_position, t)
 	var cruise_ok: bool = p0._dispatch_aim().is_equal_approx(Vector3(60, 20, 0))
-	# Settled directly over the target, horizontal speed bled off → strike arms
-	# (one tick to latch _plunging, the next to set the mode's strike flag).
-	p0.drone.global_position = Vector3(60, 8, 0)
+	p0.drone.global_position = t.global_position + Vector3(p0.dive_radius - 0.5, 8, 0)
 	p0.drone.linear_velocity = Vector3.ZERO
 	p0._fly_dispatch(1.0 / 60.0)
-	p0._fly_dispatch(1.0 / 60.0)
-	var arms: bool = p0._plunging and p0._mode.strike
+	var arms: bool = p0._plunging and p0._mode.strike \
+			and p0._mode.strike_target.is_equal_approx(t.global_position)
 
 	# A target cleared BEFORE the drop arms → rejoin instead of a pointless dive.
 	var p_extra: FollowerPilot = m.pilots[0]  # reuse a formation pilot

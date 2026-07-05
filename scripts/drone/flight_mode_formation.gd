@@ -72,13 +72,13 @@ var yaw_d_gain: float = 0.3
 ## The only sanctioned bypass of the 0.05 collective floor — on the ground.
 var landed: bool = false
 
-## Terminal kamikaze strike (P6 step 4): the pilot sets this once the drone is
-## settled directly above a CRASH target. The cascade is bypassed — throttle
-## drops to idle and the drone free-falls onto the target, holding level so it
-## lands on the mark. The impact speed from the drop is the payload: a quad
-## can't power-dive onto a ground target (thrust points up), so gravity is the
-## weapon. Still rotor-only — no applied impulse.
+## Terminal kamikaze strike: the pilot sets this once the drone is close enough
+## to commit. The cascade is bypassed — full collective points body-up at the
+## target with no tilt clamp. Reckless, but still rotor-only — no applied impulse.
 var strike: bool = false
+## Live target point for terminal strike; refreshed by FollowerPilot while the
+## target exists, otherwise the last value is used.
+var strike_target: Vector3 = Vector3.ZERO
 
 var _filtered_ang_vel: Vector3 = Vector3.ZERO
 var _err_integral: Vector3 = Vector3.ZERO
@@ -161,18 +161,21 @@ func compute(
 	return result
 
 
-## Terminal strike: throttle to idle and hold level — the drone free-falls onto
-## the target it's parked above. Same attitude-restoring law as cruise (aimed at
-## UP, keeping it flat so it drops on the mark), but collective cut to idle so
-## gravity takes it. Impact momentum from the drop clears the CRASH target.
+## Terminal strike: full throttle toward strike_target. Same attitude-restoring
+## law as cruise, but aimed at the target vector with no tilt clamp.
 func _strike(basis: Basis, angular_velocity: Vector3) -> FlightControl:
 	var result := FlightControl.new()
 	var torque_to_offset: float = 1.0 / max_thrust
 
 	_filtered_ang_vel = _filtered_ang_vel.lerp(angular_velocity, gyro_filter_alpha)
 	var body_up: Vector3 = basis.y
-	var axis_r: Vector3 = body_up.cross(Vector3.UP)
-	var angle: float = acos(clampf(body_up.dot(Vector3.UP), -1.0, 1.0))
+	var target_up := strike_target - current_position
+	if target_up.length_squared() < 1.0e-6:
+		target_up = Vector3.DOWN
+	else:
+		target_up = target_up.normalized()
+	var axis_r: Vector3 = body_up.cross(target_up)
+	var angle: float = acos(clampf(body_up.dot(target_up), -1.0, 1.0))
 	var world_torque: Vector3 = -_filtered_ang_vel * attitude_d_gain
 	if axis_r.length_squared() > 1.0e-6:
 		world_torque += axis_r.normalized() * angle * attitude_p_gain
@@ -180,7 +183,7 @@ func _strike(basis: Basis, angular_velocity: Vector3) -> FlightControl:
 	body_torque.y = 0.0
 	result.pitch_diff = clampf(body_torque.x * torque_to_offset, -max_offset, max_offset)
 	result.roll_diff = clampf(-body_torque.z * torque_to_offset, -max_offset, max_offset)
-	result.collective = 0.05  # idle — free-fall onto the target
+	result.collective = 1.0
 	return result
 
 

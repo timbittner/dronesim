@@ -113,6 +113,7 @@ func dispatch(point: Vector3, target: MissionTarget) -> void:
 	_dispatch_dwell = 0.0
 	_plunging = false
 	_strike_time = 0.0
+	_mode.strike_target = target.global_position if is_instance_valid(target) else point
 	# Cruise at the dispatch-time AGL, floored at observe_altitude — a runner
 	# dispatched from a low hover would otherwise cruise along the dirt.
 	_cruise_agl = maxf(drone.global_position.y - _ground_below(), observe_altitude)
@@ -133,9 +134,8 @@ func _dispatch_aim() -> Vector3:
 	var to := goal - drone.global_position
 	var horiz := Vector2(to.x, to.z).length()
 	if kamikaze:
-		# Hold station directly ABOVE the target at cruise altitude until settled
-		# (the position controller kills horizontal speed as it arrives), then
-		# _fly_dispatch hands off to the free-fall strike. Latched once armed.
+		# Cruise above terrain until close enough for _fly_dispatch to commit to
+		# a powered terminal dive.
 		return Vector3(goal.x, _ground_below() + _cruise_agl, goal.z)
 	if horiz > dive_radius:
 		return Vector3(goal.x, maxf(_ground_below() + _cruise_agl, goal.y), goal.z)
@@ -285,10 +285,11 @@ func _fly_dispatch(delta: float) -> void:
 	_mode.target_velocity = Vector3.ZERO
 
 	if _plunging:
-		# Terminal strike: idle throttle, free-fall onto the target. The impact
-		# crashes it on physics alone. Safety net — if it somehow drifts off the
-		# mark and doesn't hit in time, cut the link (same lose_signal() the
-		# radar shoot-down uses, rotor-only) so it never parks alive nearby.
+		# Terminal strike: full-throttle at the live target; keep the last point
+		# if it gets freed mid-dive. Safety net — if it somehow misses, cut the
+		# link (same lose_signal() the radar shoot-down uses, rotor-only).
+		if is_instance_valid(_dispatch_target):
+			_mode.strike_target = _dispatch_target.global_position
 		_mode.strike = true
 		_strike_time += delta
 		if _strike_time > STRIKE_TIMEOUT and not drone.is_crashed():
@@ -296,13 +297,15 @@ func _fly_dispatch(delta: float) -> void:
 			drone.lose_signal()
 		return
 
-	# Arm the drop once settled directly over the target: horizontally on the
-	# mark and horizontal speed bled off (else it drifts during the fall).
-	if is_instance_valid(_dispatch_target) and _dispatch_target.type == MissionTarget.Type.CRASH:
+	# Commit once close enough horizontally; the strike law handles the dive.
+	if is_instance_valid(_dispatch_target) \
+			and _dispatch_target.type == MissionTarget.Type.CRASH \
+			and not _dispatch_target.cleared:
 		var over := _dispatch_target.global_position - drone.global_position
-		var h_speed := Vector2(drone.linear_velocity.x, drone.linear_velocity.z).length()
-		if Vector2(over.x, over.z).length() < 2.0 and h_speed < 3.0:
+		if Vector2(over.x, over.z).length() < dive_radius:
 			_plunging = true
+			_mode.strike_target = _dispatch_target.global_position
+			_mode.strike = true
 			return
 
 	var to := _dispatch_point - drone.global_position
