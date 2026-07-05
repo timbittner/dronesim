@@ -100,6 +100,8 @@ var show_wind: bool = true:
 		show_wind = value
 		if _wind_panel != null:
 			_wind_panel.visible = value
+		if _wind_label != null:
+			_wind_label.visible = value
 ## Gizmo panel only — the coord readout above it stays up regardless, so
 ## toggling this just tucks it into the corner.
 var show_gizmo: bool = true:
