@@ -268,12 +268,51 @@ func _on_leader_reset() -> void:
 ## to release_altitude first, then handed the sticks in stabilized (the pilot
 ## frees itself at the handoff — no reference to clear).
 func take_off_all() -> void:
+	var grounded: Array[FollowerPilot] = []
 	for pilot in pilots:
+		if pilot.behavior == FollowerPilot.Behavior.LANDING \
+				or pilot.behavior == FollowerPilot.Behavior.LANDED:
+			grounded.append(pilot)
+	_reassign_slots(grounded)
+	for pilot in grounded:
 		pilot.takeoff()
 	if is_instance_valid(_player_pilot) \
 			and _player_pilot.behavior != FollowerPilot.Behavior.TAKEOFF:
 		_player_pilot.begin_takeoff()
 	_log("[Swarm] TAKE OFF — resuming formation")
+
+
+## Permutes slot_index within `group` (nearest-pair-first greedy matching) so
+## a mass takeoff routes each drone to its closest slot instead of whatever
+## spawn-order index it happened to hold — avoids two drones crossing paths
+## to swap sides once the formation law takes over.
+func _reassign_slots(group: Array[FollowerPilot]) -> void:
+	if group.size() < 2:
+		return
+	var leader := _get_leader()
+	if leader == null:
+		return
+	var heading := _leader_heading()
+	var origin := leader.global_position
+	var remaining_pilots := group.duplicate()
+	var remaining_indices: Array[int] = []
+	for p in group:
+		remaining_indices.append(p.slot_index)
+	while not remaining_pilots.is_empty():
+		var best_p := 0
+		var best_i := 0
+		var best_d := INF
+		for pi in remaining_pilots.size():
+			for ii in remaining_indices.size():
+				var slot_pos: Vector3 = origin + get_slot_offset(remaining_indices[ii], heading)
+				var d: float = remaining_pilots[pi].drone.global_position.distance_to(slot_pos)
+				if d < best_d:
+					best_d = d
+					best_p = pi
+					best_i = ii
+		remaining_pilots[best_p].slot_index = remaining_indices[best_i]
+		remaining_pilots.remove_at(best_p)
+		remaining_indices.remove_at(best_i)
 
 
 func _get_leader() -> DroneController:
