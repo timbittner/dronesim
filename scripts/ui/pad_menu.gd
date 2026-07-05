@@ -166,6 +166,17 @@ func _build_hud_entries() -> Array[Dictionary]:
 			"setter": func(v: int) -> void:
 				_set_all_axes_visible(v == 0),
 		},
+		{
+			"label": "GIZMO",
+			"options": toggle_options,
+			"getter": func() -> int:
+				var h := _hud()
+				return 0 if h != null and h.show_gizmo else 1,
+			"setter": func(v: int) -> void:
+				var h := _hud()
+				if h != null:
+					h.show_gizmo = (v == 0),
+		},
 	]
 	return out
 

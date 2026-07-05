@@ -100,6 +100,13 @@ var show_wind: bool = true:
 		show_wind = value
 		if _wind_panel != null:
 			_wind_panel.visible = value
+## Gizmo panel only — the coord readout above it stays up regardless, so
+## toggling this just tucks it into the corner.
+var show_gizmo: bool = true:
+	set(value):
+		show_gizmo = value
+		if _gizmo_panel != null:
+			_gizmo_panel.visible = value
 
 var _gizmo_panel: ColorRect
 var _gizmo_canvas: Control
@@ -466,13 +473,29 @@ func _build_ui() -> void:
 	_label.text = "Waiting for drone..."
 	add_child(_label)
 
+	# Coord readout: its own top-right label (NOT a gizmo_panel child) so it
+	# stays put when the GIZMO toggle hides the panel below it.
+	_coord_label = Label.new()
+	_coord_label.add_theme_font_size_override("font_size", 11)
+	_coord_label.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	_coord_label.offset_left = -170.0
+	_coord_label.offset_top = 8.0
+	_coord_label.offset_right = -8.0
+	_coord_label.offset_bottom = 22.0
+	_coord_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_coord_label.add_theme_color_override("font_color", Color(0.35, 1.0, 0.35))
+	_coord_label.add_theme_color_override("font_outline_color", Color(0, 0, 0))
+	_coord_label.add_theme_constant_override("outline_size", 1)
+	_coord_label.text = "X    0.00  Y    0.00  Z    0.00"
+	add_child(_coord_label)
+
 	_gizmo_panel = ColorRect.new()
 	_gizmo_panel.color = Color(0.0, 0.0, 0.0, 0.65)
 	_gizmo_panel.set_anchors_preset(Control.PRESET_TOP_RIGHT)
 	_gizmo_panel.offset_left = -170.0
-	_gizmo_panel.offset_top = 8.0
+	_gizmo_panel.offset_top = 30.0
 	_gizmo_panel.offset_right = -8.0
-	_gizmo_panel.offset_bottom = 110.0
+	_gizmo_panel.offset_bottom = 132.0
 	add_child(_gizmo_panel)
 
 	_gizmo_canvas = Control.new()
@@ -480,24 +503,13 @@ func _build_ui() -> void:
 	_gizmo_canvas.draw.connect(_on_gizmo_draw)
 	_gizmo_panel.add_child(_gizmo_canvas)
 
-	_coord_label = Label.new()
-	_coord_label.add_theme_font_size_override("font_size", 11)
-	_coord_label.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
-	_coord_label.offset_left = 6.0
-	_coord_label.offset_bottom = -6.0
-	_coord_label.add_theme_color_override("font_color", Color(0.35, 1.0, 0.35))
-	_coord_label.add_theme_color_override("font_outline_color", Color(0, 0, 0))
-	_coord_label.add_theme_constant_override("outline_size", 1)
-	_coord_label.text = "X    0.00  Y    0.00  Z    0.00"
-	_gizmo_panel.add_child(_coord_label)
-
 	_wind_panel = ColorRect.new()
 	_wind_panel.color = Color(0.0, 0.0, 0.0, 0.65)
 	_wind_panel.set_anchors_preset(Control.PRESET_TOP_RIGHT)
 	_wind_panel.offset_left = -170.0
-	_wind_panel.offset_top = 140.0
+	_wind_panel.offset_top = 162.0
 	_wind_panel.offset_right = -8.0
-	_wind_panel.offset_bottom = 240.0
+	_wind_panel.offset_bottom = 262.0
 	add_child(_wind_panel)
 
 	_wind_canvas = Control.new()
