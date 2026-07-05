@@ -1,4 +1,4 @@
-[gd_scene format=4 uid="uid://5jri1ism1wee"]
+[gd_scene format=3 uid="uid://5jri1ism1wee"]
 
 [ext_resource type="Script" uid="uid://c17svoyqsayfm" path="res://scripts/drone/drone_controller.gd" id="1_drone_ctrl"]
 [ext_resource type="Script" uid="uid://cf7sjdkmui05u" path="res://scripts/drone/debug_axes.gd" id="3_debug_axes"]

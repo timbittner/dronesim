@@ -18,6 +18,20 @@ signal crash_detected
 ## new one began (FlightRecorder rotates its log file on this).
 signal drone_reset
 
+# --- Pilot ---
+## True for the one drone the player flies (joins group "player_drone" —
+## resolved by camera/HUD/recorder). False for swarm followers (P6): stick
+## input and button handling are skipped entirely; a FollowerPilot drives the
+## drone through its flight mode instead. The physics pipeline below is
+## identical either way.
+@export var is_player: bool = true
+
+## Set while an external autopilot (the auto-land FollowerPilot) is flying the
+## PLAYER's drone: stick input and the altitude-hold / brake assists are
+## suppressed so a held Shift/L2 can't fight the automated descent. Followers
+## (is_player = false) never read input, so this only matters for the player.
+var under_autopilot: bool = false
+
 # --- Thrust ---
 @export var max_thrust: float = 17.5  # Newtons per rotor (35% of previous 50.0)
 
@@ -94,7 +108,7 @@ var _spawn_transform: Transform3D
 ## already absorbed much of the impact from linear_velocity.
 var _prev_velocity: Vector3 = Vector3.ZERO
 
-var _flight_mode: String = "acro"
+var _flight_mode: String = "stabilized"
 
 ## Average of the last applied rotor mix (post anti-clip/idle clamping), as a
 ## 0..100 percentage. This is the actual commanded thrust, not a recomputed
@@ -133,6 +147,8 @@ var _rotor_positions: Array[Vector3] = [
 
 func _ready() -> void:
 	add_to_group("drone")  # resolved by mission targets / tracker (P5)
+	if is_player:
+		add_to_group("player_drone")  # resolved by camera / HUD / recorder (P6)
 	_spawn_transform = global_transform
 	gravity_scale = 1.0
 	angular_damp = 0.0
@@ -256,9 +272,12 @@ func _first_mesh_instance(node: Node) -> MeshInstance3D:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if not is_player:
+		return
 	# While CRASHED the signal is lost: only reset (Triangle) and the camera
 	# toggle (R1 — the camera belongs to the pilot, not the dead drone) work.
-	if event.is_action_pressed("toggle_flight_mode") and _state == State.FLYING:
+	if event.is_action_pressed("toggle_flight_mode") and _state == State.FLYING \
+			and not under_autopilot:
 		_toggle_flight_mode()
 	if event.is_action_pressed("toggle_fpv"):
 		_toggle_fpv()
@@ -304,7 +323,7 @@ func _physics_process(delta: float) -> void:
 	# AGENTS.md "Known Issues" for detail). Polling once per physics tick
 	# catches it a tick later even if the discrete event was missed.
 	# reset() is idempotent, so double-firing in the same frame is harmless.
-	if Input.is_action_just_pressed("reset_drone"):
+	if is_player and Input.is_action_just_pressed("reset_drone"):
 		reset()
 
 
@@ -331,7 +350,7 @@ func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 
 func _crash(momentum: float) -> void:
 	_enter_crashed()
-	print("[Drone] CRASH — signal lost (impact momentum %.1f kg·m/s)" % momentum)
+	print("[%s] CRASH — signal lost (impact momentum %.1f kg·m/s)" % [name, momentum])
 
 
 ## Kill the radio link without an impact: same CRASHED transition as a crash
@@ -342,7 +361,7 @@ func lose_signal() -> void:
 	if _state == State.CRASHED:
 		return
 	_enter_crashed()
-	print("[Drone] SIGNAL LOST — radio link dead")
+	print("[%s] SIGNAL LOST — radio link dead" % name)
 
 
 func _enter_crashed() -> void:
@@ -360,6 +379,19 @@ func _enter_crashed() -> void:
 
 
 func _read_inputs() -> void:
+	if not is_player:
+		return  # followers: the pilot drives the flight mode's target directly
+	if under_autopilot:
+		# Auto-land owns the drone: zero the sticks and drop the assists so held
+		# Shift/L2 can't override the descent (the only inputs still live are the
+		# menu's take-off and Triangle reset, both handled elsewhere).
+		_throttle_input = 0.0
+		_yaw_input = 0.0
+		_pitch_input = 0.0
+		_roll_input = 0.0
+		_altitude_hold_engaged = false
+		_brake_engaged = false
+		return
 	_throttle_input = Input.get_action_strength("throttle_up") - Input.get_action_strength("throttle_down")
 	_yaw_input = Input.get_action_strength("yaw_right") - Input.get_action_strength("yaw_left")
 	_pitch_input = Input.get_action_strength("pitch_backward") - Input.get_action_strength("pitch_forward")
@@ -524,6 +556,27 @@ func _apply_angular_damping() -> void:
 	var local_ang_vel: Vector3 = global_transform.basis.inverse() * angular_velocity
 	var damp_torque_local: Vector3 = -local_ang_vel * damping_factor
 	apply_torque(global_transform.basis * damp_torque_local)
+
+
+## Install and activate an externally built flight mode — the P6 follower
+## pilot hands its drone a FlightModeFormation this way. The mode joins the
+## mode dictionary under `mode_name` (L1 toggling is player-only, so a
+## follower stays in this mode until the pilot swaps it).
+func set_flight_mode_object(mode_name: String, mode: FlightModeBase) -> void:
+	_flight_modes[mode_name] = mode
+	_flight_mode = mode_name
+	_current_mode = mode
+	flight_mode_changed.emit(_flight_mode)
+
+
+## Switch to an already-installed mode by name — the auto-land pilot restores
+## the player's previous mode ("acro"/"stabilized") through this on release.
+func select_flight_mode(mode_name: String) -> void:
+	if not _flight_modes.has(mode_name):
+		return
+	_flight_mode = mode_name
+	_current_mode = _flight_modes[mode_name]
+	flight_mode_changed.emit(_flight_mode)
 
 
 func _toggle_flight_mode() -> void:

@@ -15,8 +15,9 @@ extends Node3D
 ##
 ## The Y coordinate is irrelevant: the marker is snapped onto the terrain at
 ## _ready (and on every editor move), and the capture volume is ground-anchored.
-## Clearing emits target_cleared and turns the marker green. The drone is
-## resolved via group "drone". No collision — a trigger volume plus a visual.
+## Clearing emits target_cleared and turns the marker green. ALL drones in
+## group "drone" count (P6): the player or any swarm follower can observe or
+## crash a target. No collision — a trigger volume plus a visual.
 
 signal target_cleared(target: MissionTarget)
 
@@ -34,8 +35,9 @@ enum Type { OBSERVE, CRASH }
 ## True once the objective is met — read by the HUD compass for its dot color.
 var cleared: bool = false
 
-var _drone: DroneController = null
-var _crash_connected: bool = false
+## Drones whose crash_detected is already connected (followers spawn at
+## runtime, so the group is re-scanned each tick).
+var _crash_connected: Dictionary = {}
 var _dwell: float = 0.0
 var _mesh: MeshInstance3D
 var _mat: StandardMaterial3D
@@ -70,21 +72,25 @@ func _snap_to_ground() -> void:
 func _physics_process(delta: float) -> void:
 	if Engine.is_editor_hint():
 		return
-	if _drone == null:
-		_drone = get_tree().get_first_node_in_group("drone") as DroneController
-		if _drone == null:
-			return
-		if type == Type.CRASH and not _crash_connected:
-			_crash_connected = true
-			_drone.crash_detected.connect(_on_drone_crashed)
+	var drones := get_tree().get_nodes_in_group("drone")
+	if type == Type.CRASH:
+		for drone in drones:
+			if not _crash_connected.has(drone):
+				_crash_connected[drone] = true
+				drone.crash_detected.connect(_on_drone_crashed.bind(drone))
 
 	if cleared or type != Type.OBSERVE:
 		return
 
 	# Cylinder test: within radius horizontally AND inside the height band above
-	# the grounded marker. Dwell must be continuous — leaving resets it.
-	var d := _drone.global_position - global_position
-	var inside := Vector2(d.x, d.z).length() <= radius and d.y >= 0.0 and d.y <= height
+	# the grounded marker. Dwell must be continuous — leaving resets it. Any one
+	# drone inside keeps the dwell alive (player or follower).
+	var inside := false
+	for drone in drones:
+		var d: Vector3 = (drone as Node3D).global_position - global_position
+		if Vector2(d.x, d.z).length() <= radius and d.y >= 0.0 and d.y <= height:
+			inside = true
+			break
 	if inside:
 		_dwell += delta
 		# Pulse the volume toward white while the pilot holds inside — a visible
@@ -98,11 +104,11 @@ func _physics_process(delta: float) -> void:
 		_mat.albedo_color = _base_color
 
 
-func _on_drone_crashed() -> void:
+func _on_drone_crashed(drone: DroneController) -> void:
 	# crash_detected fires while the drone is still at the impact point.
 	if cleared:
 		return
-	var d := _drone.global_position - global_position
+	var d := drone.global_position - global_position
 	if Vector2(d.x, d.z).length() <= radius:
 		_mark_cleared()
 

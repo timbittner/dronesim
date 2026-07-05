@@ -32,4 +32,7 @@ echo "=== OSM terrain test suite ==="
 echo "=== Mission / signal test suite ==="
 "$GODOT_BIN" --headless --path "$SCRIPT_DIR" scenes/test/mission_test_scene.tscn || status=1
 
+echo "=== Swarm test suite ==="
+"$GODOT_BIN" --headless --path "$SCRIPT_DIR" scenes/test/swarm_test_scene.tscn || status=1
+
 exit $status

@@ -13,6 +13,8 @@
 [ext_resource type="PackedScene" path="res://scenes/mission/mission_target.tscn" id="11_mission_target"]
 [ext_resource type="Script" uid="uid://da74w6dhtkv8i" path="res://scripts/mission/mission_tracker.gd" id="12_mission_tracker"]
 [ext_resource type="PackedScene" path="res://scenes/mission/jamming_node.tscn" id="13_trceg"]
+[ext_resource type="Script" uid="uid://17i8mg7j3nt" path="res://scripts/swarm/swarm_manager.gd" id="14_swarm"]
+[ext_resource type="Script" uid="uid://c4plonfoquk3a" path="res://scripts/ui/pad_menu.gd" id="15_pad_menu"]
 
 [sub_resource type="BoxMesh" id="BoxMesh_pad"]
 size = Vector3(2, 0.1, 2)
@@ -63,7 +65,10 @@ shadow_enabled = true
 environment = SubResource("Env_sky")
 
 [node name="Drone" parent="." unique_id=608845008 instance=ExtResource("1_drone_scene")]
-transform = Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, 0, 1, 0)
+transform = Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, 0, 5, 0)
+
+[node name="SwarmManager" type="Node3D" parent="." unique_id=1605920039]
+script = ExtResource("14_swarm")
 
 [node name="CrashEffects" type="Node3D" parent="." unique_id=1077355102]
 script = ExtResource("5_crash_fx")
@@ -107,5 +112,12 @@ target_path = NodePath("../Drone")
 [node name="DebugHUD" type="CanvasLayer" parent="." unique_id=1958239024]
 script = ExtResource("4_debug_hud")
 
+[node name="PadMenu" type="CanvasLayer" parent="." unique_id=1342329052]
+script = ExtResource("15_pad_menu")
+
 [node name="JammingNode" parent="." unique_id=1390709013 instance=ExtResource("13_trceg")]
 transform = Transform3D(-0.30869466, 0, -0.9511612, 0, 1, 0, 0.9511612, 0, -0.30869466, -113.956894, -43.68787, 362.43304)
+
+[node name="MissionTarget" parent="." unique_id=1131435948 instance=ExtResource("11_mission_target")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -31.93541, -26.732124, 217.25224)
+type = 1

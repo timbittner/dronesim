@@ -8,7 +8,8 @@ Simple by nature of the drone: "go here", "avoid X", "drop payload",
   danger-zone idea and target/goal marking. P5 shipped the `JammingNode`
   primitive (`scripts/mission/jamming_node.gd`) which doubles as a no-fly-zone
   building block.
-- **Payload-drop target type** — deferred out of P5 to P6. P5's
+- **Payload-drop target type** — **P7 candidate** (pushed from P6, with quest
+  upgrades generally). P5's
   `MissionTarget` (`scripts/mission/mission_target.gd`) has an enum `type`
   (OBSERVE / CRASH) explicitly left extensible for a DELIVER/drop type — the
   drone releases a payload within `radius` to clear it. Pairs with the payload

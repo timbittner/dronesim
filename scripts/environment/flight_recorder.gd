@@ -14,6 +14,8 @@ extends Node
 ## nothing. In-sim replay/scrubbing is deliberately out of scope (see
 ## plans/backlog/drone-controls-and-physics.md).
 
+## Explicit drone override; the fallback is group "player_drone" (P6 —
+## followers are not recorded, telemetry stays one file per player flight).
 @export var drone_path: NodePath = NodePath("../Drone")
 
 ## user:// path of the file currently being written (new one per flight).
@@ -28,6 +30,9 @@ var _flight_index: int = 0
 
 func _ready() -> void:
 	_drone = get_node_or_null(drone_path) as DroneController
+	if _drone == null:
+		# Works in main.tscn because Drone precedes the recorder in tree order.
+		_drone = get_tree().get_first_node_in_group("player_drone") as DroneController
 	if _drone == null:
 		printerr("[FlightRecorder] no drone at ", drone_path, " — recording disabled")
 		set_physics_process(false)

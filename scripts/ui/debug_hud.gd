@@ -6,8 +6,12 @@ extends CanvasLayer
 ## Also shows a world-axis gizmo (Minecraft F3-style) and drone XYZ in bottom-left.
 ## Prints a one-line telemetry summary every 60 frames for MCP debug capture.
 
+## Explicit drone override; the fallback is group "player_drone" (P6).
 @export var drone_path: NodePath = NodePath("../Drone")
 @export var print_interval: int = 60  # frames between console telemetry prints
+## Periodic HUD console telemetry — off by default; the FlightRecorder JSONL
+## is the real record. Flip on for live MCP debug capture.
+@export var console_telemetry: bool = false
 
 ## PS2-look tuning, mirrored onto the shader every frame — the ShaderMaterial
 ## is built in code, and the remote inspector can't edit runtime sub-resources,
@@ -60,6 +64,18 @@ var _mission_label: Label
 var _tracker: Node = null
 var _tracker_searched: bool = false
 
+# Dispatch reticle (P6 step 4): in FPV, a physics ray from the camera through
+# screen center finds the ground point under the crosshair (VTOL VR-style —
+# the reticle marks terrain, not a fixed attitude line). If a MissionTarget's
+# radius covers that point the crosshair goes amber, and Square
+# ("dispatch_follower") sends the nearest formation follower at it.
+var _reticle_canvas: Control
+var _reticle_hit: Vector3 = Vector3.ZERO
+var _reticle_valid: bool = false
+var _reticle_target: MissionTarget = null
+var _swarm: Node = null
+var _swarm_searched: bool = false
+
 var _gizmo_panel: ColorRect
 var _gizmo_canvas: Control
 var _coord_label: Label
@@ -95,7 +111,7 @@ var _ps2_rect: ColorRect  # PS2 look + signal static, always on
 
 
 func _ready() -> void:
-	_drone = get_node_or_null(drone_path) as DroneController
+	_drone = _find_player_drone()
 	_build_ui()
 	_gizmo_font = ThemeDB.fallback_font
 	_gizmo_font_size = ThemeDB.fallback_font_size
@@ -110,9 +126,16 @@ func _connect_drone_signals() -> void:
 	_drone.fpv_toggled.connect(_on_fpv_toggled)
 
 
+func _find_player_drone() -> DroneController:
+	var d := get_node_or_null(drone_path) as DroneController
+	if d == null:
+		d = get_tree().get_first_node_in_group("player_drone") as DroneController
+	return d
+
+
 func _process(delta: float) -> void:
 	if _drone == null:
-		_drone = get_node_or_null(drone_path) as DroneController
+		_drone = _find_player_drone()
 		if _drone == null:
 			return
 		_connect_drone_signals()
@@ -147,11 +170,75 @@ func _process(delta: float) -> void:
 	_gizmo_canvas.queue_redraw()
 	_wind_canvas.queue_redraw()
 	_compass_canvas.queue_redraw()
+	_reticle_canvas.queue_redraw()
 
 	_frame_count += 1
 	if _frame_count >= print_interval:
 		_frame_count = 0
-		print("[HUD] %s" % _format_telemetry_compact(telemetry))
+		if console_telemetry:
+			print("[HUD] %s" % _format_telemetry_compact(telemetry))
+
+
+# --- Dispatch reticle (P6 step 4) ---
+
+## Raycast lives in _physics_process — direct_space_state is only safe to
+## query on the physics tick.
+func _physics_process(_delta: float) -> void:
+	_reticle_valid = false
+	_reticle_target = null
+	if _drone == null or _drone.is_crashed() or not _drone.is_fpv_enabled():
+		return
+	var cam := get_viewport().get_camera_3d()
+	if cam == null:
+		return
+	var from := cam.global_position
+	var to := from - cam.global_basis.z * 2000.0
+	var query := PhysicsRayQueryParameters3D.create(from, to, 0xFFFFFFFF, [_drone.get_rid()])
+	var hit := get_viewport().world_3d.direct_space_state.intersect_ray(query)
+	if hit.is_empty():
+		return
+	_reticle_valid = true
+	_reticle_hit = hit.position
+	# Pick the target whose capture radius covers the hit point (nearest wins).
+	var best_d := INF
+	for t in get_tree().get_nodes_in_group("mission_targets"):
+		var mt := t as MissionTarget
+		if mt == null or mt.cleared:
+			continue
+		var d3 := mt.global_position - _reticle_hit
+		var d := Vector2(d3.x, d3.z).length()
+		if d <= mt.radius and d < best_d:
+			best_d = d
+			_reticle_target = mt
+
+
+func _unhandled_input(event: InputEvent) -> void:
+	if not event.is_action_pressed("dispatch_follower") or not _reticle_valid:
+		return
+	if not _swarm_searched:
+		_swarm_searched = true
+		_swarm = get_tree().get_first_node_in_group("swarm_manager")
+	if _swarm == null:
+		return
+	_swarm.dispatch(_reticle_hit, _reticle_target)
+	get_viewport().set_input_as_handled()
+
+
+func _on_reticle_draw() -> void:
+	# FPV only — 3PV aims nothing (_reticle_valid stays false outside FPV).
+	if not _reticle_valid:
+		return
+	var center := _reticle_canvas.get_size() * 0.5
+	var color := Color(1.0, 0.72, 0.1) if _reticle_target != null else Color(0.35, 1.0, 0.35, 0.8)
+	var gap := 5.0
+	var arm := 9.0
+	for dir in [Vector2.LEFT, Vector2.RIGHT, Vector2.UP, Vector2.DOWN]:
+		_reticle_canvas.draw_line(center + dir * gap, center + dir * (gap + arm), color, 2.0)
+	if _reticle_target != null:
+		_reticle_canvas.draw_arc(center, gap + arm + 4.0, 0.0, TAU, 24, color, 1.5)
+	var dist := _drone.global_position.distance_to(_reticle_hit)
+	_draw_centered("%.0f m" % dist, center + Vector2(0.0, gap + arm + 24.0), color,
+			_reticle_canvas)
 
 
 func _on_crash_detected() -> void:
@@ -422,6 +509,13 @@ func _build_ui() -> void:
 	_compass_canvas.draw.connect(_on_compass_draw)
 	_compass_panel.add_child(_compass_canvas)
 
+	# Dispatch reticle: full-rect canvas, draws only while FPV has a ground hit.
+	_reticle_canvas = Control.new()
+	_reticle_canvas.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_reticle_canvas.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_reticle_canvas.draw.connect(_on_reticle_draw)
+	add_child(_reticle_canvas)
+
 	# Mission success banner, centered just above the compass strip.
 	_mission_label = Label.new()
 	_mission_label.text = "MISSION SUCCESS"
@@ -646,9 +740,12 @@ func _wrap180(deg: float) -> float:
 
 
 ## Draws text horizontally centered on pos.x, with its baseline near pos.y.
-func _draw_centered(text: String, pos: Vector2, color: Color) -> void:
+## Canvas defaults to the compass tape; the reticle passes its own.
+func _draw_centered(text: String, pos: Vector2, color: Color, canvas: Control = null) -> void:
+	if canvas == null:
+		canvas = _compass_canvas
 	var w := _gizmo_font.get_string_size(
 		text, HORIZONTAL_ALIGNMENT_LEFT, -1, COMPASS_FONT_SIZE).x
-	_compass_canvas.draw_string(
+	canvas.draw_string(
 		_gizmo_font, Vector2(pos.x - w * 0.5, pos.y), text,
 		HORIZONTAL_ALIGNMENT_LEFT, -1, COMPASS_FONT_SIZE, color)
