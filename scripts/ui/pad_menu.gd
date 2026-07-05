@@ -34,10 +34,28 @@ var _manager: Node = null
 var _manager_searched: bool = false
 
 
+## The engine's embedded default font (Open Sans) lacks the ▲▼◀▶✕○ menu
+## glyphs; on desktop the OS font stack fills them in, but the web export has no
+## OS fallback and renders tofu. Register a tiny DejaVu subset (just those six
+## glyphs) as a global fallback on the default font so both platforms match,
+## without changing the primary UI font. See assets/fonts/.
+const GLYPH_FONT: FontFile = preload("res://assets/fonts/ui_glyphs.ttf")
+
+
 func _ready() -> void:
 	layer = 2  # above the DebugHUD layer
+	_install_glyph_fallback()
 	_build_entries()
 	_build_ui()
+
+
+func _install_glyph_fallback() -> void:
+	var base := ThemeDB.fallback_font
+	if base == null:
+		return
+	var fallbacks := base.get_fallbacks()
+	if not fallbacks.has(GLYPH_FONT):
+		base.set_fallbacks(fallbacks + [GLYPH_FONT])
 
 
 func _build_entries() -> void:

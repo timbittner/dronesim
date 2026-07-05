@@ -179,6 +179,7 @@ func setup_landing(player: DroneController, swarm_manager: Node) -> void:
 	_mode.hover_throttle = player.hover_throttle
 	_mode.max_thrust = player.max_thrust
 	player.set_flight_mode_object("autoland", _mode)
+	player.under_autopilot = true  # suppress the player's sticks + assists
 	player.crash_detected.connect(_on_drone_crashed)
 	player.drone_reset.connect(release)
 	land()
@@ -202,6 +203,7 @@ func begin_takeoff() -> void:
 ## law for a mid-air handoff) — and retire.
 func release() -> void:
 	if drone != null:
+		drone.under_autopilot = false  # sticks + assists live again
 		drone.select_flight_mode("stabilized")
 	queue_free()
 

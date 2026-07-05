@@ -26,6 +26,12 @@ signal drone_reset
 ## identical either way.
 @export var is_player: bool = true
 
+## Set while an external autopilot (the auto-land FollowerPilot) is flying the
+## PLAYER's drone: stick input and the altitude-hold / brake assists are
+## suppressed so a held Shift/L2 can't fight the automated descent. Followers
+## (is_player = false) never read input, so this only matters for the player.
+var under_autopilot: bool = false
+
 # --- Thrust ---
 @export var max_thrust: float = 17.5  # Newtons per rotor (35% of previous 50.0)
 
@@ -270,7 +276,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	# While CRASHED the signal is lost: only reset (Triangle) and the camera
 	# toggle (R1 — the camera belongs to the pilot, not the dead drone) work.
-	if event.is_action_pressed("toggle_flight_mode") and _state == State.FLYING:
+	if event.is_action_pressed("toggle_flight_mode") and _state == State.FLYING \
+			and not under_autopilot:
 		_toggle_flight_mode()
 	if event.is_action_pressed("toggle_fpv"):
 		_toggle_fpv()
@@ -374,6 +381,17 @@ func _enter_crashed() -> void:
 func _read_inputs() -> void:
 	if not is_player:
 		return  # followers: the pilot drives the flight mode's target directly
+	if under_autopilot:
+		# Auto-land owns the drone: zero the sticks and drop the assists so held
+		# Shift/L2 can't override the descent (the only inputs still live are the
+		# menu's take-off and Triangle reset, both handled elsewhere).
+		_throttle_input = 0.0
+		_yaw_input = 0.0
+		_pitch_input = 0.0
+		_roll_input = 0.0
+		_altitude_hold_engaged = false
+		_brake_engaged = false
+		return
 	_throttle_input = Input.get_action_strength("throttle_up") - Input.get_action_strength("throttle_down")
 	_yaw_input = Input.get_action_strength("yaw_right") - Input.get_action_strength("yaw_left")
 	_pitch_input = Input.get_action_strength("pitch_backward") - Input.get_action_strength("pitch_forward")
