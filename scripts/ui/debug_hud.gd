@@ -76,6 +76,46 @@ var _reticle_target: MissionTarget = null
 var _swarm: Node = null
 var _swarm_searched: bool = false
 
+# Dispatched-follower marker (P6.5 step 4): cyan triangle pointing at each
+# DISPATCHED follower, apex up/down by relative altitude to the player,
+# clamped to the screen edge when off-view, with its follower number.
+var _marker_canvas: Control
+const MARKER_COLOR := Color(0.3, 0.9, 1.0)
+
+# On-screen event log (P6.5): last few swarm/mission lines, bottom-right —
+# web builds have no console. Fed by SwarmManager._log via group "debug_hud".
+const LOG_MAX_LINES: int = 8
+var _log_lines: PackedStringArray = []
+var _log_label: Label
+
+# HUD element toggles (P6.5 step 2), driven by the pad menu's HUD submenu.
+var show_log: bool = true:
+	set(value):
+		show_log = value
+		if _log_label != null:
+			_log_label.visible = value
+var show_telemetry: bool = true:
+	set(value):
+		show_telemetry = value
+		if _label != null:
+			_label.visible = value
+		if _bg != null:
+			_bg.visible = value
+var show_wind: bool = true:
+	set(value):
+		show_wind = value
+		if _wind_panel != null:
+			_wind_panel.visible = value
+		if _wind_label != null:
+			_wind_label.visible = value
+## Gizmo panel only — the coord readout above it stays up regardless, so
+## toggling this just tucks it into the corner.
+var show_gizmo: bool = true:
+	set(value):
+		show_gizmo = value
+		if _gizmo_panel != null:
+			_gizmo_panel.visible = value
+
 var _gizmo_panel: ColorRect
 var _gizmo_canvas: Control
 var _coord_label: Label
@@ -111,6 +151,7 @@ var _ps2_rect: ColorRect  # PS2 look + signal static, always on
 
 
 func _ready() -> void:
+	add_to_group("debug_hud")
 	_drone = _find_player_drone()
 	_build_ui()
 	_gizmo_font = ThemeDB.fallback_font
@@ -171,6 +212,7 @@ func _process(delta: float) -> void:
 	_wind_canvas.queue_redraw()
 	_compass_canvas.queue_redraw()
 	_reticle_canvas.queue_redraw()
+	_marker_canvas.queue_redraw()
 
 	_frame_count += 1
 	if _frame_count >= print_interval:
@@ -215,13 +257,18 @@ func _physics_process(_delta: float) -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if not event.is_action_pressed("dispatch_follower") or not _reticle_valid:
 		return
+	var swarm := _swarm_manager()
+	if swarm == null:
+		return
+	swarm.dispatch(_reticle_hit, _reticle_target)
+	get_viewport().set_input_as_handled()
+
+
+func _swarm_manager() -> Node:
 	if not _swarm_searched:
 		_swarm_searched = true
 		_swarm = get_tree().get_first_node_in_group("swarm_manager")
-	if _swarm == null:
-		return
-	_swarm.dispatch(_reticle_hit, _reticle_target)
-	get_viewport().set_input_as_handled()
+	return _swarm
 
 
 func _on_reticle_draw() -> void:
@@ -239,6 +286,46 @@ func _on_reticle_draw() -> void:
 	var dist := _drone.global_position.distance_to(_reticle_hit)
 	_draw_centered("%.0f m" % dist, center + Vector2(0.0, gap + arm + 24.0), color,
 			_reticle_canvas)
+
+
+## Cyan triangle per DISPATCHED follower, apex toward its relative altitude,
+## pinned to the canvas edge (24 px margin) when off-screen or behind the
+## camera, with its follower number alongside.
+func _on_marker_draw() -> void:
+	if _drone == null:
+		return
+	var cam := get_viewport().get_camera_3d()
+	if not cam or not is_instance_valid(cam):
+		return
+	var swarm := _swarm_manager()
+	if swarm == null:
+		return
+	var size := _marker_canvas.get_size()
+	var margin := 24.0
+	for pilot in swarm.pilots:
+		if pilot.behavior != FollowerPilot.Behavior.DISPATCHED:
+			continue
+		var drone: DroneController = pilot.drone
+		if drone == null or not is_instance_valid(drone) or drone.is_crashed():
+			continue
+		var pos: Vector3 = drone.global_position
+		var sp := cam.unproject_position(pos)
+		if cam.is_position_behind(pos):
+			sp = size - sp  # mirror through screen center
+		sp.x = clampf(sp.x, margin, size.x - margin)
+		sp.y = clampf(sp.y, margin, size.y - margin)
+		var apex_up: bool = pos.y > _drone.global_position.y
+		_draw_marker_triangle(sp, apex_up)
+		var num := (drone.name as String).trim_prefix("Follower")
+		_draw_centered(num, sp + Vector2(0.0, -16.0 if apex_up else 20.0), MARKER_COLOR, _marker_canvas)
+
+
+func _draw_marker_triangle(pos: Vector2, apex_up: bool) -> void:
+	var dy: float = -10.0 if apex_up else 10.0
+	var tip := pos + Vector2(0.0, dy)
+	var base_a := pos + Vector2(-7.0, -dy * 0.4)
+	var base_b := pos + Vector2(7.0, -dy * 0.4)
+	_marker_canvas.draw_colored_polygon(PackedVector2Array([tip, base_a, base_b]), MARKER_COLOR)
 
 
 func _on_crash_detected() -> void:
@@ -440,13 +527,29 @@ func _build_ui() -> void:
 	_label.text = "Waiting for drone..."
 	add_child(_label)
 
+	# Coord readout: its own top-right label (NOT a gizmo_panel child) so it
+	# stays put when the GIZMO toggle hides the panel below it.
+	_coord_label = Label.new()
+	_coord_label.add_theme_font_size_override("font_size", 11)
+	_coord_label.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	_coord_label.offset_left = -170.0
+	_coord_label.offset_top = 8.0
+	_coord_label.offset_right = -8.0
+	_coord_label.offset_bottom = 22.0
+	_coord_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_coord_label.add_theme_color_override("font_color", Color(0.35, 1.0, 0.35))
+	_coord_label.add_theme_color_override("font_outline_color", Color(0, 0, 0))
+	_coord_label.add_theme_constant_override("outline_size", 1)
+	_coord_label.text = "X    0.00  Y    0.00  Z    0.00"
+	add_child(_coord_label)
+
 	_gizmo_panel = ColorRect.new()
 	_gizmo_panel.color = Color(0.0, 0.0, 0.0, 0.65)
 	_gizmo_panel.set_anchors_preset(Control.PRESET_TOP_RIGHT)
 	_gizmo_panel.offset_left = -170.0
-	_gizmo_panel.offset_top = 8.0
+	_gizmo_panel.offset_top = 30.0
 	_gizmo_panel.offset_right = -8.0
-	_gizmo_panel.offset_bottom = 110.0
+	_gizmo_panel.offset_bottom = 132.0
 	add_child(_gizmo_panel)
 
 	_gizmo_canvas = Control.new()
@@ -454,41 +557,35 @@ func _build_ui() -> void:
 	_gizmo_canvas.draw.connect(_on_gizmo_draw)
 	_gizmo_panel.add_child(_gizmo_canvas)
 
-	_coord_label = Label.new()
-	_coord_label.add_theme_font_size_override("font_size", 11)
-	_coord_label.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
-	_coord_label.offset_left = 6.0
-	_coord_label.offset_bottom = -6.0
-	_coord_label.add_theme_color_override("font_color", Color(0.35, 1.0, 0.35))
-	_coord_label.add_theme_color_override("font_outline_color", Color(0, 0, 0))
-	_coord_label.add_theme_constant_override("outline_size", 1)
-	_coord_label.text = "X    0.00  Y    0.00  Z    0.00"
-	_gizmo_panel.add_child(_coord_label)
+	# Wind readout: its own top-right label above the panel (same treatment as
+	# the coord readout above the gizmo panel), right-justified.
+	_wind_label = Label.new()
+	_wind_label.add_theme_font_size_override("font_size", 11)
+	_wind_label.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	_wind_label.offset_left = -170.0
+	_wind_label.offset_top = 140.0
+	_wind_label.offset_right = -8.0
+	_wind_label.offset_bottom = 154.0
+	_wind_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_wind_label.add_theme_color_override("font_color", Color(0.35, 1.0, 0.35))
+	_wind_label.add_theme_color_override("font_outline_color", Color(0, 0, 0))
+	_wind_label.add_theme_constant_override("outline_size", 1)
+	_wind_label.text = "WIND CALM"
+	add_child(_wind_label)
 
 	_wind_panel = ColorRect.new()
 	_wind_panel.color = Color(0.0, 0.0, 0.0, 0.65)
 	_wind_panel.set_anchors_preset(Control.PRESET_TOP_RIGHT)
 	_wind_panel.offset_left = -170.0
-	_wind_panel.offset_top = 140.0
+	_wind_panel.offset_top = 162.0
 	_wind_panel.offset_right = -8.0
-	_wind_panel.offset_bottom = 240.0
+	_wind_panel.offset_bottom = 262.0
 	add_child(_wind_panel)
 
 	_wind_canvas = Control.new()
 	_wind_canvas.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_wind_canvas.draw.connect(_on_wind_draw)
 	_wind_panel.add_child(_wind_canvas)
-
-	_wind_label = Label.new()
-	_wind_label.add_theme_font_size_override("font_size", 11)
-	_wind_label.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
-	_wind_label.offset_left = 6.0
-	_wind_label.offset_bottom = -6.0
-	_wind_label.add_theme_color_override("font_color", Color(0.35, 1.0, 0.35))
-	_wind_label.add_theme_color_override("font_outline_color", Color(0, 0, 0))
-	_wind_label.add_theme_constant_override("outline_size", 1)
-	_wind_label.text = "WIND CALM"
-	_wind_panel.add_child(_wind_label)
 
 	# Compass tape, bottom center — clear of the top-center radar / signal-lost
 	# banners. Semi-transparent strip; the canvas draws the ticks and labels.
@@ -515,6 +612,30 @@ func _build_ui() -> void:
 	_reticle_canvas.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_reticle_canvas.draw.connect(_on_reticle_draw)
 	add_child(_reticle_canvas)
+
+	# Dispatched-follower marker: full-rect canvas, draws a triangle per
+	# DISPATCHED pilot every frame (same pattern as the reticle canvas).
+	_marker_canvas = Control.new()
+	_marker_canvas.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_marker_canvas.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_marker_canvas.draw.connect(_on_marker_draw)
+	add_child(_marker_canvas)
+
+	# Event log, bottom-right corner — right-aligned, grows upward.
+	_log_label = Label.new()
+	_log_label.add_theme_font_size_override("font_size", 12)
+	_log_label.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	_log_label.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	_log_label.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	_log_label.offset_left = -420.0
+	_log_label.offset_right = -8.0
+	_log_label.offset_bottom = -8.0
+	_log_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_log_label.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
+	_log_label.add_theme_color_override("font_color", Color(0.35, 1.0, 0.35))
+	_log_label.add_theme_color_override("font_outline_color", Color(0, 0, 0))
+	_log_label.add_theme_constant_override("outline_size", 2)
+	add_child(_log_label)
 
 	# Mission success banner, centered just above the compass strip.
 	_mission_label = Label.new()
@@ -558,6 +679,15 @@ func _build_ui() -> void:
 	_radar_label.offset_top = 70.0
 	_radar_label.visible = false
 	add_child(_radar_label)
+
+
+## Append a line to the on-screen event log (bottom-right, last 8 lines).
+func log_line(msg: String) -> void:
+	_log_lines.append(msg)
+	while _log_lines.size() > LOG_MAX_LINES:
+		_log_lines.remove_at(0)
+	_log_label.text = "\n".join(_log_lines)
+	_log_label.visible = show_log
 
 
 func _on_gizmo_draw() -> void:

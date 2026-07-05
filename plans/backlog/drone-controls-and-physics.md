@@ -4,6 +4,10 @@
   the current stabilized-mode jitter/stickiness and rate-vs-angle-mode snap
   writeups; likely fix is blending the two control laws across the deadzone
   instead of hard-switching.
+- **Prop obstruction** - props that get clipped by collision with ground/
+  other drones should no longer be able to provide thrust - inducing imbalance 
+  and tumbling until the collision ends. (Strong prop collisions could disable
+  it entirely)
 - **Deeper physics** — motor/prop dynamics, battery sag, more detailed
   aerodynamics beyond the current relative-airspeed drag model. Separate
   from [swarm-mechanics.md](swarm-mechanics.md) — both are just features to

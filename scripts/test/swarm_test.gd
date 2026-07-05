@@ -51,6 +51,7 @@ func _run_all_tests() -> void:
 	await _run_test("test_follower_holds_and_reconverges")
 	await _run_test("test_autoland_settles_and_takes_off")
 	await _run_test("test_kamikaze_clears_crash_target")
+	await _run_test("test_pad_slots")
 
 	var total := _passed + _failed
 	print("[TEST] ========================================")
@@ -337,21 +338,46 @@ func test_pad_menu_navigation() -> bool:
 	menu._abort()
 	var aborts: bool = applied[0] == -1 and value[0] == 0 and not menu.is_open
 
+	# Submenu: Cross on a "submenu" entry descends (not close); cycling inside
+	# it stages a value; BACK applies that level and pops back to root.
+	var sub_value := [0]
+	var sub_applied := [-1]
+	menu.entries = [
+		{"label": "SUB", "kind": "submenu", "entries": [
+			{"label": "C", "options": func() -> Array: return ["c0", "c1"],
+				"getter": func() -> int: return sub_value[0],
+				"setter": func(v: int) -> void:
+					sub_applied[0] = v
+					sub_value[0] = v},
+		]},
+	]
+	menu._open()
+	menu._apply_and_close()  # descend into SUB (root has one entry, still selected)
+	var entered: bool = menu.is_open and menu.entries.size() == 2  # C + auto BACK
+	menu._cycle(1)  # C: c0 -> c1 staged
+	var sub_staged: bool = menu.staged[0] == 1 and sub_applied[0] == -1
+	menu._navigate(1)  # select BACK
+	menu._apply_and_close()  # BACK: apply level, pop to root
+	var back_ok: bool = sub_applied[0] == 1 and sub_value[0] == 1 \
+			and menu.is_open and menu.entries.size() == 1
+	menu._abort()  # root: only entry left is SUB itself (Cross on it re-descends)
+	var submenu_ok: bool = entered and sub_staged and back_ok and not menu.is_open
+
 	print("[TEST] nav=", nav_ok, " staged_only=", staged_only,
-			" applies=", applies, " aborts=", aborts)
+			" applies=", applies, " aborts=", aborts, " submenu=", submenu_ok)
 	menu.queue_free()
-	var passed := nav_ok and staged_only and applies and aborts
+	var passed := nav_ok and staged_only and applies and aborts and submenu_ok
 	print("[TEST] ", "PASS" if passed else "FAIL",
-			" — wrap nav, stage on cycle, apply on Cross, discard on Circle")
+			" — wrap nav, stage on cycle, apply on Cross, discard on Circle, submenu descend/back")
 	return passed
 
 
 # ---------------------------------------------------------------------------
 # Dispatch (P6 step 4): the manager picks the NEAREST formation follower, busy
 # followers are skipped, an all-busy swarm refuses; the pilot aims a hover
-# height above bare points but straight AT a live CRASH target (kamikaze), and
-# rejoins the formation once its target reads cleared. No physics settling —
-# positions are teleported and checked synchronously.
+# height above bare points but commits to a powered terminal dive near a live
+# CRASH target, and rejoins the formation once its target reads cleared. No
+# physics settling — positions are teleported and checked synchronously.
 # ---------------------------------------------------------------------------
 func test_dispatch_selection_and_aim() -> bool:
 	print("[TEST] --- test_dispatch_selection_and_aim ---")
@@ -366,6 +392,8 @@ func test_dispatch_selection_and_aim() -> bool:
 		return false
 	var p0: FollowerPilot = m.pilots[0]
 	var p1: FollowerPilot = m.pilots[1]
+	p0.takeoff()  # ground-start spawn parks LANDED; dispatch() only picks FORMATION
+	p1.takeoff()
 	p0.drone.global_position = Vector3(0, 5, 0)
 	p1.drone.global_position = Vector3(50, 5, 0)
 	var point := Vector3(60, 0, 0)
@@ -379,8 +407,8 @@ func test_dispatch_selection_and_aim() -> bool:
 	var hover_ok: bool = p1._dispatch_aim() \
 			.is_equal_approx(point + Vector3.UP * p1.observe_altitude)
 
-	# Live CRASH target → hold station overhead at the dispatch-time cruise
-	# altitude until settled, then _fly_dispatch arms the free-fall strike.
+	# Live CRASH target → cruise at dispatch-time AGL until close enough, then
+	# _fly_dispatch arms the powered terminal strike.
 	var t := MissionTarget.new()
 	t.type = MissionTarget.Type.CRASH
 	add_child(t)
@@ -388,13 +416,11 @@ func test_dispatch_selection_and_aim() -> bool:
 	p0.drone.global_position = Vector3(0, 20, 0)  # dispatch altitude to hold
 	p0.dispatch(t.global_position, t)
 	var cruise_ok: bool = p0._dispatch_aim().is_equal_approx(Vector3(60, 20, 0))
-	# Settled directly over the target, horizontal speed bled off → strike arms
-	# (one tick to latch _plunging, the next to set the mode's strike flag).
-	p0.drone.global_position = Vector3(60, 8, 0)
+	p0.drone.global_position = t.global_position + Vector3(p0.dive_radius - 0.5, 8, 0)
 	p0.drone.linear_velocity = Vector3.ZERO
 	p0._fly_dispatch(1.0 / 60.0)
-	p0._fly_dispatch(1.0 / 60.0)
-	var arms: bool = p0._plunging and p0._mode.strike
+	var arms: bool = p0._plunging and p0._mode.strike \
+			and p0._mode.strike_target.is_equal_approx(t.global_position)
 
 	# A target cleared BEFORE the drop arms → rejoin instead of a pointless dive.
 	var p_extra: FollowerPilot = m.pilots[0]  # reuse a formation pilot
@@ -494,8 +520,11 @@ func test_follower_holds_and_reconverges() -> bool:
 		m.queue_free()
 		return false
 	var follower: DroneController = m.pilots[0].drone
+	var spawned_parked: bool = m.pilots[0].behavior == FollowerPilot.Behavior.LANDED \
+			and follower.global_position.y < 1.0
+	m.pilots[0].takeoff()  # ground-start spawn → flies to the slot on its own
 
-	# Hold: 3 s of hover in the slot.
+	# Hold: 3 s of hover in the slot (also covers ground-start → converge).
 	for i in range(180):
 		await get_tree().physics_frame
 	var hold_err: float = (follower.global_position - m.get_slot_position(0)).length()
@@ -508,11 +537,11 @@ func test_follower_holds_and_reconverges() -> bool:
 	var back_err: float = (follower.global_position - m.get_slot_position(0)).length()
 	var reconverges: bool = back_err < 2.0
 
-	print("[TEST] hold_err=%.2f back_err=%.2f" % [hold_err, back_err])
+	print("[TEST] spawned_parked=", spawned_parked, " hold_err=%.2f back_err=%.2f" % [hold_err, back_err])
 	m.queue_free()
-	var passed := holds and reconverges
+	var passed := spawned_parked and holds and reconverges
 	print("[TEST] ", "PASS" if passed else "FAIL",
-			" — follower holds slot and re-converges after a 6 m shove")
+			" — spawns parked, holds slot and re-converges after a 6 m shove")
 	return passed
 
 
@@ -582,6 +611,9 @@ func test_kamikaze_clears_crash_target() -> bool:
 		return false
 	var pilot: FollowerPilot = m.pilots[0]
 
+	pilot.takeoff()  # ground-start spawn parks LANDED — lift off before dispatch
+	for i in range(60):
+		await get_tree().physics_frame
 	pilot.dispatch(t.global_position, t)
 	for i in range(600):  # up to 10 s for the run
 		await get_tree().physics_frame
@@ -597,4 +629,34 @@ func test_kamikaze_clears_crash_target() -> bool:
 	var passed := crashed and cleared
 	print("[TEST] ", "PASS" if passed else "FAIL",
 			" — follower kamikaze impact clears the CRASH target")
+	return passed
+
+
+# ---------------------------------------------------------------------------
+# Launch-pad slot table: the 8 pad cells are unique and spaced at least
+# PAD_PITCH apart (the 2×2 pad only has room for these 8 — anything beyond
+# spawns airborne in its formation slot instead, checked elsewhere).
+# ---------------------------------------------------------------------------
+func test_pad_slots() -> bool:
+	print("[TEST] --- test_pad_slots ---")
+	var m := SwarmManager.new()
+	m.follower_count = 0
+	add_child(m)
+	await get_tree().physics_frame  # let the (empty) deferred spawn fire first
+
+	var slots: Array[Vector3] = []
+	for i in range(SwarmManager.PAD_CELLS.size()):
+		slots.append(m.pad_slot(i))
+
+	var min_dist := INF
+	for i in range(slots.size()):
+		for j in range(i + 1, slots.size()):
+			var d: float = Vector2(slots[i].x, slots[i].z).distance_to(Vector2(slots[j].x, slots[j].z))
+			min_dist = minf(min_dist, d)
+	var spaced_ok: bool = min_dist >= SwarmManager.PAD_PITCH - 0.01
+
+	print("[TEST] cells=%d min_dist=%.2f spaced_ok=%s" % [slots.size(), min_dist, spaced_ok])
+	m.queue_free()
+	var passed := spaced_ok
+	print("[TEST] ", "PASS" if passed else "FAIL", " — 8 unique, spaced pad slots")
 	return passed
