@@ -9,11 +9,17 @@ extends CanvasLayer
 ## tilt, and a one-line hint in the corner shows both controls (hidden while
 ## the menu is open). Dead while the player drone is CRASHED.
 ##
-## Entries are data, two kinds:
+## Entries are data, four kinds (distinguished by which keys they carry):
 ## - cycle: {label, options: Callable -> Array of names, getter: Callable ->
 ##   int, setter: Callable(int)} — left/right stages a value, Cross applies.
 ## - action: {label, kind: "action", action: Callable} — Cross fires it (only
-##   the SELECTED action) and closes; left/right does nothing on it.
+##   the SELECTED action), applies the current level's staged cycles, and
+##   closes the whole menu; left/right does nothing on it.
+## - submenu: {label, kind: "submenu", entries: Array[Dictionary]} — Cross
+##   descends into `entries` (pushing the current level) instead of closing.
+## - back: {label: "BACK", kind: "back"} — Cross applies the current level's
+##   staged cycles, then pops back to the parent level (auto-appended to every
+##   submenu's entry list, no need to add it by hand).
 ## Later features (targeting mode, payload) extend this array.
 
 ## Degrees per second of FPV tilt sweep while holding dpad up/down.
@@ -25,13 +31,19 @@ var selected: int = 0
 var entries: Array[Dictionary] = []
 ## Staged (not yet applied) option index per entry, valid while open.
 var staged: Array[int] = []
+## Parent levels above the current one — each frame is {entries, staged,
+## selected} for a submenu descent (see _enter_submenu / _exit_submenu).
+var _stack: Array[Dictionary] = []
 
 var _panel: ColorRect
 var _rows: Array[Label] = []
+var _legend: Label
 var _hint: Label
 var _player: DroneController = null
 var _manager: Node = null
 var _manager_searched: bool = false
+var _hud_node: Node = null
+var _hud_searched: bool = false
 
 
 ## The engine's embedded default font (Open Sans) lacks the ▲▼◀▶✕○ menu
@@ -99,7 +111,92 @@ func _build_entries() -> void:
 				if m != null:
 					m.call_backup(),
 		},
+		{
+			"label": "HUD",
+			"kind": "submenu",
+			"entries": _build_hud_entries(),
+		},
 	]
+
+
+## HUD submenu (P6.5 step 2): ON/OFF toggles for individually-hideable HUD
+## elements. Player's DebugAxes also stands in for every follower's — one
+## flip covers the whole swarm.
+func _build_hud_entries() -> Array[Dictionary]:
+	var toggle_options := func() -> Array: return ["ON", "OFF"]
+	var out: Array[Dictionary] = [
+		{
+			"label": "LOG",
+			"options": toggle_options,
+			"getter": func() -> int:
+				var h := _hud()
+				return 0 if h != null and h.show_log else 1,
+			"setter": func(v: int) -> void:
+				var h := _hud()
+				if h != null:
+					h.show_log = (v == 0),
+		},
+		{
+			"label": "TELEMETRY",
+			"options": toggle_options,
+			"getter": func() -> int:
+				var h := _hud()
+				return 0 if h != null and h.show_telemetry else 1,
+			"setter": func(v: int) -> void:
+				var h := _hud()
+				if h != null:
+					h.show_telemetry = (v == 0),
+		},
+		{
+			"label": "WIND",
+			"options": toggle_options,
+			"getter": func() -> int:
+				var h := _hud()
+				return 0 if h != null and h.show_wind else 1,
+			"setter": func(v: int) -> void:
+				var h := _hud()
+				if h != null:
+					h.show_wind = (v == 0),
+		},
+		{
+			"label": "AXES",
+			"options": toggle_options,
+			"getter": func() -> int:
+				return 0 if _player_axes_visible() else 1,
+			"setter": func(v: int) -> void:
+				_set_all_axes_visible(v == 0),
+		},
+	]
+	return out
+
+
+func _player_axes_visible() -> bool:
+	if _player == null:
+		_player = get_tree().get_first_node_in_group("player_drone") as DroneController
+	var axes := _player.get_node_or_null("DebugAxes") if _player != null else null
+	return axes == null or axes.visible
+
+
+## ponytail: backups spawned after toggling AXES get default-on axes — reapply
+## from here on backup spawn if that ever grates.
+func _set_all_axes_visible(on: bool) -> void:
+	if _player == null:
+		_player = get_tree().get_first_node_in_group("player_drone") as DroneController
+	if _player != null:
+		var paxes := _player.get_node_or_null("DebugAxes")
+		if paxes != null:
+			paxes.visible = on
+	for d in get_tree().get_nodes_in_group("drone"):
+		var axes := (d as Node).get_node_or_null("DebugAxes")
+		if axes != null:
+			axes.visible = on
+
+
+func _hud() -> Node:
+	if not _hud_searched:
+		_hud_searched = true
+		_hud_node = get_tree().get_first_node_in_group("debug_hud")
+	return _hud_node
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -151,11 +248,12 @@ func _process(delta: float) -> void:
 func _open() -> void:
 	staged.clear()
 	for e in entries:
-		staged.append(0 if _is_action(e) else (e.getter as Callable).call())
+		staged.append((e.getter as Callable).call() if e.has("getter") else 0)
 	selected = 0
 	is_open = true
 	_panel.visible = true
 	_hint.visible = false
+	_sync_rows()
 	_refresh()
 
 
@@ -167,36 +265,80 @@ func _navigate(dir: int) -> void:
 
 
 ## Cycle the selected entry's staged value — nothing applies until confirm.
-## No-op on action entries (they have no value to cycle).
+## No-op on entries with no value (action / submenu / back).
 func _cycle(dir: int) -> void:
-	if entries.is_empty() or _is_action(entries[selected]):
+	if entries.is_empty() or not entries[selected].has("setter"):
 		return
 	var options: Array = (entries[selected].options as Callable).call()
 	staged[selected] = wrapi(staged[selected] + dir, 0, options.size())
 	_refresh()
 
 
-## Cross: apply every staged value change, fire the selected entry if it is
-## an action, then close.
+## Cross: descend into a submenu, apply-and-pop out of one via BACK, or apply
+## the current level's staged values and (action → fire it, then) close.
 func _apply_and_close() -> void:
-	for i in entries.size():
-		if not _is_action(entries[i]):
-			(entries[i].setter as Callable).call(staged[i])
-	if not entries.is_empty() and _is_action(entries[selected]):
-		(entries[selected].action as Callable).call()
+	if entries.is_empty():
+		_close()
+		return
+	var e: Dictionary = entries[selected]
+	var kind: String = e.get("kind", "")
+	if kind == "submenu":
+		_enter_submenu(e.entries)
+		return
+	_apply_staged()
+	if kind == "back":
+		_exit_submenu()
+		return
+	if kind == "action":
+		(e.action as Callable).call()
 	_close()
 
 
-func _is_action(e: Dictionary) -> bool:
-	return e.get("kind", "") == "action"
+func _apply_staged() -> void:
+	for i in entries.size():
+		if entries[i].has("setter"):
+			(entries[i].setter as Callable).call(staged[i])
 
 
-## Circle: close, staged changes discarded.
+## Push the current level and switch to `sub_entries` (a BACK entry is
+## auto-appended so every submenu can pop back without defining one).
+func _enter_submenu(sub_entries: Array) -> void:
+	_stack.append({"entries": entries, "staged": staged, "selected": selected})
+	var next: Array[Dictionary] = []
+	for e in sub_entries:
+		next.append(e)
+	next.append({"label": "BACK", "kind": "back"})
+	entries = next
+	staged = []
+	for e in entries:
+		staged.append((e.getter as Callable).call() if e.has("getter") else 0)
+	selected = 0
+	_sync_rows()
+	_refresh()
+
+
+func _exit_submenu() -> void:
+	if _stack.is_empty():
+		return
+	var frame: Dictionary = _stack.pop_back()
+	entries = frame.entries
+	staged = frame.staged
+	selected = frame.selected
+	_sync_rows()
+	_refresh()
+
+
+## Circle: abort the current level's staged changes; any submenu descent is
+## unwound back to the root level (its own BACK/Cross already applied whatever
+## the player confirmed on the way in).
 func _abort() -> void:
 	_close()
 
 
 func _close() -> void:
+	while not _stack.is_empty():
+		var frame: Dictionary = _stack.pop_back()
+		entries = frame.entries
 	is_open = false
 	_panel.visible = false
 	_hint.visible = true
@@ -246,12 +388,12 @@ func _build_ui() -> void:
 		_panel.add_child(row)
 		_rows.append(row)
 
-	var legend := Label.new()
-	legend.text = "▲▼ select  ◀▶ change  ✕ apply  ○ abort"
-	legend.position = Vector2(10, 28 + entries.size() * 24 + 8)
-	legend.add_theme_font_size_override("font_size", 10)
-	legend.add_theme_color_override("font_color", Color(0.35, 1.0, 0.35, 0.5))
-	_panel.add_child(legend)
+	_legend = Label.new()
+	_legend.text = "▲▼ select  ◀▶ change  ✕ apply/enter  ○ abort"
+	_legend.position = Vector2(10, 28 + entries.size() * 24 + 8)
+	_legend.add_theme_font_size_override("font_size", 10)
+	_legend.add_theme_color_override("font_color", Color(0.35, 1.0, 0.35, 0.5))
+	_panel.add_child(_legend)
 
 	# Closed-state hint line, same corner the panel opens in.
 	_hint = Label.new()
@@ -275,14 +417,34 @@ func _refresh() -> void:
 		var cursor: String = "▶" if i == selected else " "
 		# Labels may be a Callable for live text (cooldown countdown, toggles).
 		var label: String = (e.label as Callable).call() if e.label is Callable else e.label
-		if _is_action(e):
-			_rows[i].text = "%s %s" % [cursor, label]
-		else:
+		if e.has("setter"):
 			var options: Array = (e.options as Callable).call()
 			var current: int = (e.getter as Callable).call()
 			var name_s: String = str(options[staged[i]])
 			if staged[i] != current:
 				name_s += " *"  # staged, not yet applied
 			_rows[i].text = "%s %s   ◀ %s ▶" % [cursor, e.label, name_s]
+		elif e.get("kind", "") == "submenu":
+			_rows[i].text = "%s %s   ▶▶" % [cursor, label]
+		else:
+			_rows[i].text = "%s %s" % [cursor, label]
 		_rows[i].add_theme_color_override("font_color",
 				Color(1.0, 0.72, 0.1) if i == selected else Color(0.35, 1.0, 0.35, 0.85))
+
+
+## Grow the row pool and panel/legend geometry to fit the current level's
+## entry count — submenus can be a different length than the root menu.
+func _sync_rows() -> void:
+	while _rows.size() < entries.size():
+		var row := Label.new()
+		row.add_theme_font_size_override("font_size", 14)
+		_panel.add_child(row)
+		_rows.append(row)
+	for i in _rows.size():
+		_rows[i].visible = i < entries.size()
+		if i < entries.size():
+			_rows[i].position = Vector2(10, 28 + i * 24)
+	var height := 64.0 + entries.size() * 24.0
+	_panel.offset_top = -12.0 - height
+	if _legend != null:
+		_legend.position = Vector2(10, 28 + entries.size() * 24 + 8)

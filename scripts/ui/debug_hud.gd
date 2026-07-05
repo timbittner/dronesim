@@ -79,9 +79,27 @@ var _swarm_searched: bool = false
 # On-screen event log (P6.5): last few swarm/mission lines, bottom-right —
 # web builds have no console. Fed by SwarmManager._log via group "debug_hud".
 const LOG_MAX_LINES: int = 8
-var show_log: bool = true
 var _log_lines: PackedStringArray = []
 var _log_label: Label
+
+# HUD element toggles (P6.5 step 2), driven by the pad menu's HUD submenu.
+var show_log: bool = true:
+	set(value):
+		show_log = value
+		if _log_label != null:
+			_log_label.visible = value
+var show_telemetry: bool = true:
+	set(value):
+		show_telemetry = value
+		if _label != null:
+			_label.visible = value
+		if _bg != null:
+			_bg.visible = value
+var show_wind: bool = true:
+	set(value):
+		show_wind = value
+		if _wind_panel != null:
+			_wind_panel.visible = value
 
 var _gizmo_panel: ColorRect
 var _gizmo_canvas: Control

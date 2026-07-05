@@ -337,12 +337,37 @@ func test_pad_menu_navigation() -> bool:
 	menu._abort()
 	var aborts: bool = applied[0] == -1 and value[0] == 0 and not menu.is_open
 
+	# Submenu: Cross on a "submenu" entry descends (not close); cycling inside
+	# it stages a value; BACK applies that level and pops back to root.
+	var sub_value := [0]
+	var sub_applied := [-1]
+	menu.entries = [
+		{"label": "SUB", "kind": "submenu", "entries": [
+			{"label": "C", "options": func() -> Array: return ["c0", "c1"],
+				"getter": func() -> int: return sub_value[0],
+				"setter": func(v: int) -> void:
+					sub_applied[0] = v
+					sub_value[0] = v},
+		]},
+	]
+	menu._open()
+	menu._apply_and_close()  # descend into SUB (root has one entry, still selected)
+	var entered: bool = menu.is_open and menu.entries.size() == 2  # C + auto BACK
+	menu._cycle(1)  # C: c0 -> c1 staged
+	var sub_staged: bool = menu.staged[0] == 1 and sub_applied[0] == -1
+	menu._navigate(1)  # select BACK
+	menu._apply_and_close()  # BACK: apply level, pop to root
+	var back_ok: bool = sub_applied[0] == 1 and sub_value[0] == 1 \
+			and menu.is_open and menu.entries.size() == 1
+	menu._abort()  # root: only entry left is SUB itself (Cross on it re-descends)
+	var submenu_ok: bool = entered and sub_staged and back_ok and not menu.is_open
+
 	print("[TEST] nav=", nav_ok, " staged_only=", staged_only,
-			" applies=", applies, " aborts=", aborts)
+			" applies=", applies, " aborts=", aborts, " submenu=", submenu_ok)
 	menu.queue_free()
-	var passed := nav_ok and staged_only and applies and aborts
+	var passed := nav_ok and staged_only and applies and aborts and submenu_ok
 	print("[TEST] ", "PASS" if passed else "FAIL",
-			" — wrap nav, stage on cycle, apply on Cross, discard on Circle")
+			" — wrap nav, stage on cycle, apply on Cross, discard on Circle, submenu descend/back")
 	return passed
 
 

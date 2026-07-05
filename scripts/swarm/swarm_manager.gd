@@ -104,6 +104,7 @@ func _physics_process(delta: float) -> void:
 
 
 func _spawn_followers() -> void:
+	_log("[Swarm] All Systems Ready")
 	var leader := _get_leader()
 	for i in range(follower_count):
 		var slot := get_slot_position(i) if leader != null \
