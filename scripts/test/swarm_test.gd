@@ -635,9 +635,9 @@ func test_kamikaze_clears_crash_target() -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Launch-pad slot table: 15 unique ground slots, spaced at least PAD_PITCH
-# apart, with the 8 core cells fitting inside the 3×3 pad (1.5 m half-extent
-# minus prop half-width).
+# Launch-pad slot table: the 8 pad cells are unique and spaced at least
+# PAD_PITCH apart (the 2×2 pad only has room for these 8 — anything beyond
+# spawns airborne in its formation slot instead, checked elsewhere).
 # ---------------------------------------------------------------------------
 func test_pad_slots() -> bool:
 	print("[TEST] --- test_pad_slots ---")
@@ -647,7 +647,7 @@ func test_pad_slots() -> bool:
 	await get_tree().physics_frame  # let the (empty) deferred spawn fire first
 
 	var slots: Array[Vector3] = []
-	for i in range(15):
+	for i in range(SwarmManager.PAD_CELLS.size()):
 		slots.append(m.pad_slot(i))
 
 	var min_dist := INF
@@ -657,14 +657,8 @@ func test_pad_slots() -> bool:
 			min_dist = minf(min_dist, d)
 	var spaced_ok: bool = min_dist >= SwarmManager.PAD_PITCH - 0.01
 
-	var core_ok := true
-	for i in range(8):
-		if Vector2(slots[i].x, slots[i].z).length() > 1.5 - 0.34:
-			core_ok = false
-
-	print("[TEST] min_dist=%.2f spaced_ok=%s core_ok=%s" % [min_dist, spaced_ok, core_ok])
+	print("[TEST] cells=%d min_dist=%.2f spaced_ok=%s" % [slots.size(), min_dist, spaced_ok])
 	m.queue_free()
-	var passed := spaced_ok and core_ok
-	print("[TEST] ", "PASS" if passed else "FAIL",
-			" — 15 unique pad slots, core 8 fit inside the pad")
+	var passed := spaced_ok
+	print("[TEST] ", "PASS" if passed else "FAIL", " — 8 unique, spaced pad slots")
 	return passed

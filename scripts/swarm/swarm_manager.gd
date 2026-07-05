@@ -6,10 +6,11 @@ extends Node3D
 ## node = no swarm. Thin by design — per-drone behavior lives in each
 ## FollowerPilot; this node only owns the roster and the formation slot table.
 ##
-## Followers spawn parked on the launch pad (3×3 core around the leader, extra
-## slots on the grass beyond it) and take off on the menu's TAKE OFF command.
-## No inter-follower collision avoidance; the slot tables keep spacing,
-## physics sorts out the rest.
+## The first 8 followers spawn parked on the 2×2 launch pad around the leader
+## and take off on the menu's TAKE OFF command; any beyond that spawn airborne
+## directly in their formation slot (pad has no room for more). No
+## inter-follower collision avoidance; the slot tables keep spacing, physics
+## sorts out the rest.
 
 ## Number of follower drones to spawn.
 @export var follower_count: int = 8
@@ -66,13 +67,10 @@ const DRONE_SCENE: PackedScene = preload("res://scenes/drone/drone.tscn")
 
 ## Launch-pad slot grid, meters between neighbors.
 const PAD_PITCH := 0.8
-## 8 core cells ringing the leader (fits the 3×3 pad), then 7 outer cells
-## that land on the grass beyond the pad edge.
+## The 8 cells ringing the leader on the 2×2 pad — all the room there is.
 const PAD_CELLS: Array[Vector2i] = [
 	Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1),
 	Vector2i(1, 1), Vector2i(1, -1), Vector2i(-1, 1), Vector2i(-1, -1),
-	Vector2i(2, 0), Vector2i(-2, 0), Vector2i(0, 2), Vector2i(0, -2),
-	Vector2i(2, 1), Vector2i(-2, -1), Vector2i(2, -1),
 ]
 
 var pilots: Array[FollowerPilot] = []
@@ -114,11 +112,9 @@ func _physics_process(delta: float) -> void:
 		pilot.descent_rate = descent_rate
 
 
-## Ground slot for follower `i` — 8 core cells on the pad, 7 more beyond it,
-## further slots (e.g. CALL BACKUP) fall back to an airborne spawn.
+## Ground slot for pad follower `i` (0..7) — one of the 8 cells ringing the
+## leader on the 2×2 pad.
 func pad_slot(i: int) -> Vector3:
-	if i >= PAD_CELLS.size():
-		return global_position + Vector3(i * spacing, altitude_offset, 0)
 	var cell := PAD_CELLS[i]
 	var x := global_position.x + cell.x * PAD_PITCH
 	var z := global_position.z + cell.y * PAD_PITCH
@@ -128,8 +124,12 @@ func pad_slot(i: int) -> Vector3:
 func _spawn_followers() -> void:
 	_log("[Swarm] All Systems Ready")
 	for i in range(follower_count):
-		var pilot := _spawn_one(i, pad_slot(i))
-		pilot.park()
+		if i < PAD_CELLS.size():
+			var pilot := _spawn_one(i, pad_slot(i))
+			pilot.park()
+		else:
+			# Pad's full — spawn straight into the formation slot, airborne.
+			_spawn_one(i, get_slot_position(i))
 	var leader := _get_leader()
 	if leader != null and not leader.drone_reset.is_connected(_on_leader_reset):
 		leader.drone_reset.connect(_on_leader_reset)
