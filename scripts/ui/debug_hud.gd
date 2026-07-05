@@ -503,6 +503,22 @@ func _build_ui() -> void:
 	_gizmo_canvas.draw.connect(_on_gizmo_draw)
 	_gizmo_panel.add_child(_gizmo_canvas)
 
+	# Wind readout: its own top-right label above the panel (same treatment as
+	# the coord readout above the gizmo panel), right-justified.
+	_wind_label = Label.new()
+	_wind_label.add_theme_font_size_override("font_size", 11)
+	_wind_label.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	_wind_label.offset_left = -170.0
+	_wind_label.offset_top = 140.0
+	_wind_label.offset_right = -8.0
+	_wind_label.offset_bottom = 154.0
+	_wind_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_wind_label.add_theme_color_override("font_color", Color(0.35, 1.0, 0.35))
+	_wind_label.add_theme_color_override("font_outline_color", Color(0, 0, 0))
+	_wind_label.add_theme_constant_override("outline_size", 1)
+	_wind_label.text = "WIND CALM"
+	add_child(_wind_label)
+
 	_wind_panel = ColorRect.new()
 	_wind_panel.color = Color(0.0, 0.0, 0.0, 0.65)
 	_wind_panel.set_anchors_preset(Control.PRESET_TOP_RIGHT)
@@ -516,17 +532,6 @@ func _build_ui() -> void:
 	_wind_canvas.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_wind_canvas.draw.connect(_on_wind_draw)
 	_wind_panel.add_child(_wind_canvas)
-
-	_wind_label = Label.new()
-	_wind_label.add_theme_font_size_override("font_size", 11)
-	_wind_label.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
-	_wind_label.offset_left = 6.0
-	_wind_label.offset_bottom = -6.0
-	_wind_label.add_theme_color_override("font_color", Color(0.35, 1.0, 0.35))
-	_wind_label.add_theme_color_override("font_outline_color", Color(0, 0, 0))
-	_wind_label.add_theme_constant_override("outline_size", 1)
-	_wind_label.text = "WIND CALM"
-	_wind_panel.add_child(_wind_label)
 
 	# Compass tape, bottom center — clear of the top-center radar / signal-lost
 	# banners. Semi-transparent strip; the canvas draws the ticks and labels.
