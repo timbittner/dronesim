@@ -76,6 +76,12 @@ var _reticle_target: MissionTarget = null
 var _swarm: Node = null
 var _swarm_searched: bool = false
 
+# Dispatched-follower marker (P6.5 step 4): cyan triangle pointing at each
+# DISPATCHED follower, apex up/down by relative altitude to the player,
+# clamped to the screen edge when off-view, with its follower number.
+var _marker_canvas: Control
+const MARKER_COLOR := Color(0.3, 0.9, 1.0)
+
 # On-screen event log (P6.5): last few swarm/mission lines, bottom-right —
 # web builds have no console. Fed by SwarmManager._log via group "debug_hud".
 const LOG_MAX_LINES: int = 8
@@ -206,6 +212,7 @@ func _process(delta: float) -> void:
 	_wind_canvas.queue_redraw()
 	_compass_canvas.queue_redraw()
 	_reticle_canvas.queue_redraw()
+	_marker_canvas.queue_redraw()
 
 	_frame_count += 1
 	if _frame_count >= print_interval:
@@ -250,13 +257,18 @@ func _physics_process(_delta: float) -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if not event.is_action_pressed("dispatch_follower") or not _reticle_valid:
 		return
+	var swarm := _swarm_manager()
+	if swarm == null:
+		return
+	swarm.dispatch(_reticle_hit, _reticle_target)
+	get_viewport().set_input_as_handled()
+
+
+func _swarm_manager() -> Node:
 	if not _swarm_searched:
 		_swarm_searched = true
 		_swarm = get_tree().get_first_node_in_group("swarm_manager")
-	if _swarm == null:
-		return
-	_swarm.dispatch(_reticle_hit, _reticle_target)
-	get_viewport().set_input_as_handled()
+	return _swarm
 
 
 func _on_reticle_draw() -> void:
@@ -274,6 +286,46 @@ func _on_reticle_draw() -> void:
 	var dist := _drone.global_position.distance_to(_reticle_hit)
 	_draw_centered("%.0f m" % dist, center + Vector2(0.0, gap + arm + 24.0), color,
 			_reticle_canvas)
+
+
+## Cyan triangle per DISPATCHED follower, apex toward its relative altitude,
+## pinned to the canvas edge (24 px margin) when off-screen or behind the
+## camera, with its follower number alongside.
+func _on_marker_draw() -> void:
+	if _drone == null:
+		return
+	var cam := get_viewport().get_camera_3d()
+	if not cam or not is_instance_valid(cam):
+		return
+	var swarm := _swarm_manager()
+	if swarm == null:
+		return
+	var size := _marker_canvas.get_size()
+	var margin := 24.0
+	for pilot in swarm.pilots:
+		if pilot.behavior != FollowerPilot.Behavior.DISPATCHED:
+			continue
+		var drone: DroneController = pilot.drone
+		if drone == null or not is_instance_valid(drone) or drone.is_crashed():
+			continue
+		var pos: Vector3 = drone.global_position
+		var sp := cam.unproject_position(pos)
+		if cam.is_position_behind(pos):
+			sp = size - sp  # mirror through screen center
+		sp.x = clampf(sp.x, margin, size.x - margin)
+		sp.y = clampf(sp.y, margin, size.y - margin)
+		var apex_up: bool = pos.y > _drone.global_position.y
+		_draw_marker_triangle(sp, apex_up)
+		var num := (drone.name as String).trim_prefix("Follower")
+		_draw_centered(num, sp + Vector2(0.0, -16.0 if apex_up else 20.0), MARKER_COLOR, _marker_canvas)
+
+
+func _draw_marker_triangle(pos: Vector2, apex_up: bool) -> void:
+	var dy: float = -10.0 if apex_up else 10.0
+	var tip := pos + Vector2(0.0, dy)
+	var base_a := pos + Vector2(-7.0, -dy * 0.4)
+	var base_b := pos + Vector2(7.0, -dy * 0.4)
+	_marker_canvas.draw_colored_polygon(PackedVector2Array([tip, base_a, base_b]), MARKER_COLOR)
 
 
 func _on_crash_detected() -> void:
@@ -560,6 +612,14 @@ func _build_ui() -> void:
 	_reticle_canvas.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_reticle_canvas.draw.connect(_on_reticle_draw)
 	add_child(_reticle_canvas)
+
+	# Dispatched-follower marker: full-rect canvas, draws a triangle per
+	# DISPATCHED pilot every frame (same pattern as the reticle canvas).
+	_marker_canvas = Control.new()
+	_marker_canvas.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_marker_canvas.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_marker_canvas.draw.connect(_on_marker_draw)
+	add_child(_marker_canvas)
 
 	# Event log, bottom-right corner — right-aligned, grows upward.
 	_log_label = Label.new()
