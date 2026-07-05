@@ -160,6 +160,17 @@ func land() -> void:
 	set_behavior(Behavior.LANDING)
 
 
+## Ground-start park (spawn time, not a flown landing): motors cut, latched
+## LANDED immediately — takeoff() flies it to the slot from here same as an
+## auto-land touchdown.
+func park() -> void:
+	_mode.landed = true
+	_mode.strike = false
+	_plunging = false
+	_strike_time = 0.0
+	set_behavior(Behavior.LANDED)
+
+
 ## Resume formation flight from LANDING / LANDED (motors back on; the
 ## formation mode flies to the slot from a ground start on its own).
 func takeoff() -> void:

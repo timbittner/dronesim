@@ -6,13 +6,13 @@ extends Node3D
 ## node = no swarm. Thin by design — per-drone behavior lives in each
 ## FollowerPilot; this node only owns the roster and the formation slot table.
 ##
-## Followers spawn airborne, already in their slots above the leader's pad.
-## ponytail: no grounded takeoff sequencing yet — follow-up once the formation
-## mode is trusted. No inter-follower collision avoidance either; the slot
-## tables keep spacing, physics sorts out the rest.
+## Followers spawn parked on the launch pad (3×3 core around the leader, extra
+## slots on the grass beyond it) and take off on the menu's TAKE OFF command.
+## No inter-follower collision avoidance; the slot tables keep spacing,
+## physics sorts out the rest.
 
 ## Number of follower drones to spawn.
-@export var follower_count: int = 5
+@export var follower_count: int = 8
 ## Nearest-neighbor spacing in the slot tables, meters.
 @export var spacing: float = 1.5
 ## RING / BOHR orbit radius, meters.
@@ -64,6 +64,17 @@ enum Formation { LINE, V, RING, BOHR }
 
 const DRONE_SCENE: PackedScene = preload("res://scenes/drone/drone.tscn")
 
+## Launch-pad slot grid, meters between neighbors.
+const PAD_PITCH := 0.8
+## 8 core cells ringing the leader (fits the 3×3 pad), then 7 outer cells
+## that land on the grass beyond the pad edge.
+const PAD_CELLS: Array[Vector2i] = [
+	Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1),
+	Vector2i(1, 1), Vector2i(1, -1), Vector2i(-1, 1), Vector2i(-1, -1),
+	Vector2i(2, 0), Vector2i(-2, 0), Vector2i(0, 2), Vector2i(0, -2),
+	Vector2i(2, 1), Vector2i(-2, -1), Vector2i(2, -1),
+]
+
 var pilots: Array[FollowerPilot] = []
 
 var _leader: DroneController = null
@@ -103,13 +114,26 @@ func _physics_process(delta: float) -> void:
 		pilot.descent_rate = descent_rate
 
 
+## Ground slot for follower `i` — 8 core cells on the pad, 7 more beyond it,
+## further slots (e.g. CALL BACKUP) fall back to an airborne spawn.
+func pad_slot(i: int) -> Vector3:
+	if i >= PAD_CELLS.size():
+		return global_position + Vector3(i * spacing, altitude_offset, 0)
+	var cell := PAD_CELLS[i]
+	var x := global_position.x + cell.x * PAD_PITCH
+	var z := global_position.z + cell.y * PAD_PITCH
+	return Vector3(x, ground_height(x, z) + 0.25, z)
+
+
 func _spawn_followers() -> void:
 	_log("[Swarm] All Systems Ready")
-	var leader := _get_leader()
 	for i in range(follower_count):
-		var slot := get_slot_position(i) if leader != null \
-				else global_position + Vector3(i * spacing, altitude_offset, 0)
-		_spawn_one(i, slot)
+		var pilot := _spawn_one(i, pad_slot(i))
+		pilot.park()
+	var leader := _get_leader()
+	if leader != null and not leader.drone_reset.is_connected(_on_leader_reset):
+		leader.drone_reset.connect(_on_leader_reset)
+	_park_player()
 	_log("[Swarm] spawned %d followers (%s formation)"
 			% [follower_count, Formation.keys()[formation]])
 
@@ -212,6 +236,13 @@ func land_all() -> void:
 	for pilot in pilots:
 		if pilot.behavior == FollowerPilot.Behavior.FORMATION:
 			pilot.land()
+	_park_player()
+	_log("[Swarm] AUTO-LAND — swarm landing in place")
+
+
+## Attaches the transient auto-land pilot to the leader if one isn't already
+## parked (shared by AUTO-LAND and the initial/post-reset ground start).
+func _park_player() -> void:
 	var leader := _get_leader()
 	if leader != null and not leader.is_crashed() and not is_instance_valid(_player_pilot):
 		_player_pilot = FollowerPilot.new()
@@ -220,7 +251,17 @@ func land_all() -> void:
 		_player_pilot.release_altitude = release_altitude
 		add_child(_player_pilot)
 		_player_pilot.setup_landing(leader, self)
-	_log("[Swarm] AUTO-LAND — swarm landing in place")
+
+
+## Triangle reset re-parks the player (a reset player in stabilized would
+## float off the pad at zero stick). Followers are untouched — DOWN wrecks
+## stay put, live ones catch up to the leader on their own.
+func _on_leader_reset() -> void:
+	# The old _player_pilot (if any) frees itself via its own drone_reset →
+	# release() connection this same signal dispatch — clear our reference
+	# now and defer the reparent so it runs after that queue_free() lands.
+	_player_pilot = null
+	call_deferred("_park_player")
 
 
 ## TAKE OFF: landed followers fly back to their slots; the player is flown up

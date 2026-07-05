@@ -51,6 +51,7 @@ func _run_all_tests() -> void:
 	await _run_test("test_follower_holds_and_reconverges")
 	await _run_test("test_autoland_settles_and_takes_off")
 	await _run_test("test_kamikaze_clears_crash_target")
+	await _run_test("test_pad_slots")
 
 	var total := _passed + _failed
 	print("[TEST] ========================================")
@@ -391,6 +392,8 @@ func test_dispatch_selection_and_aim() -> bool:
 		return false
 	var p0: FollowerPilot = m.pilots[0]
 	var p1: FollowerPilot = m.pilots[1]
+	p0.takeoff()  # ground-start spawn parks LANDED; dispatch() only picks FORMATION
+	p1.takeoff()
 	p0.drone.global_position = Vector3(0, 5, 0)
 	p1.drone.global_position = Vector3(50, 5, 0)
 	var point := Vector3(60, 0, 0)
@@ -519,8 +522,11 @@ func test_follower_holds_and_reconverges() -> bool:
 		m.queue_free()
 		return false
 	var follower: DroneController = m.pilots[0].drone
+	var spawned_parked: bool = m.pilots[0].behavior == FollowerPilot.Behavior.LANDED \
+			and follower.global_position.y < 1.0
+	m.pilots[0].takeoff()  # ground-start spawn → flies to the slot on its own
 
-	# Hold: 3 s of hover in the slot.
+	# Hold: 3 s of hover in the slot (also covers ground-start → converge).
 	for i in range(180):
 		await get_tree().physics_frame
 	var hold_err: float = (follower.global_position - m.get_slot_position(0)).length()
@@ -533,11 +539,11 @@ func test_follower_holds_and_reconverges() -> bool:
 	var back_err: float = (follower.global_position - m.get_slot_position(0)).length()
 	var reconverges: bool = back_err < 2.0
 
-	print("[TEST] hold_err=%.2f back_err=%.2f" % [hold_err, back_err])
+	print("[TEST] spawned_parked=", spawned_parked, " hold_err=%.2f back_err=%.2f" % [hold_err, back_err])
 	m.queue_free()
-	var passed := holds and reconverges
+	var passed := spawned_parked and holds and reconverges
 	print("[TEST] ", "PASS" if passed else "FAIL",
-			" — follower holds slot and re-converges after a 6 m shove")
+			" — spawns parked, holds slot and re-converges after a 6 m shove")
 	return passed
 
 
@@ -607,6 +613,9 @@ func test_kamikaze_clears_crash_target() -> bool:
 		return false
 	var pilot: FollowerPilot = m.pilots[0]
 
+	pilot.takeoff()  # ground-start spawn parks LANDED — lift off before dispatch
+	for i in range(60):
+		await get_tree().physics_frame
 	pilot.dispatch(t.global_position, t)
 	for i in range(600):  # up to 10 s for the run
 		await get_tree().physics_frame
@@ -622,4 +631,40 @@ func test_kamikaze_clears_crash_target() -> bool:
 	var passed := crashed and cleared
 	print("[TEST] ", "PASS" if passed else "FAIL",
 			" — follower kamikaze impact clears the CRASH target")
+	return passed
+
+
+# ---------------------------------------------------------------------------
+# Launch-pad slot table: 15 unique ground slots, spaced at least PAD_PITCH
+# apart, with the 8 core cells fitting inside the 3×3 pad (1.5 m half-extent
+# minus prop half-width).
+# ---------------------------------------------------------------------------
+func test_pad_slots() -> bool:
+	print("[TEST] --- test_pad_slots ---")
+	var m := SwarmManager.new()
+	m.follower_count = 0
+	add_child(m)
+	await get_tree().physics_frame  # let the (empty) deferred spawn fire first
+
+	var slots: Array[Vector3] = []
+	for i in range(15):
+		slots.append(m.pad_slot(i))
+
+	var min_dist := INF
+	for i in range(slots.size()):
+		for j in range(i + 1, slots.size()):
+			var d: float = Vector2(slots[i].x, slots[i].z).distance_to(Vector2(slots[j].x, slots[j].z))
+			min_dist = minf(min_dist, d)
+	var spaced_ok: bool = min_dist >= SwarmManager.PAD_PITCH - 0.01
+
+	var core_ok := true
+	for i in range(8):
+		if Vector2(slots[i].x, slots[i].z).length() > 1.5 - 0.34:
+			core_ok = false
+
+	print("[TEST] min_dist=%.2f spaced_ok=%s core_ok=%s" % [min_dist, spaced_ok, core_ok])
+	m.queue_free()
+	var passed := spaced_ok and core_ok
+	print("[TEST] ", "PASS" if passed else "FAIL",
+			" — 15 unique pad slots, core 8 fit inside the pad")
 	return passed
