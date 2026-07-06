@@ -83,6 +83,9 @@ func _run_all_tests() -> void:
 	# Roll→yaw coupling test
 	await _run_test("test_stabilized_roll_does_not_induce_yaw_spin")
 
+	# Blended control-law continuity across the old hard-switch boundary
+	await _run_test("test_stabilized_blend_is_continuous_across_deadzone")
+
 	# Assisted flight modes (Phase B)
 	await _run_test("test_altitude_hold_maintains_altitude")
 	await _run_test("test_brake_kills_horizontal_velocity")
@@ -348,6 +351,33 @@ func test_stabilized_roll_does_not_induce_yaw_spin() -> bool:
 	# Heading should not have spun out (allow moderate drift)
 	var passed: bool = abs(heading_delta) < 45.0
 	print("[TEST] ", "PASS" if passed else "FAIL", " — heading_delta=", heading_delta, "° (expected |delta| < 45°, no yaw spin-out)")
+	return passed
+
+
+func test_stabilized_blend_is_continuous_across_deadzone() -> bool:
+	print("[TEST] --- test_stabilized_blend_is_continuous_across_deadzone ---")
+
+	# Pure test, no physics ticks: two separate mode instances (compute()
+	# mutates _filtered_ang_vel) so both calls start from the same filter state.
+	var mode_below := FlightModeStabilized.new()
+	var mode_above := FlightModeStabilized.new()
+	mode_below.hover_throttle = 0.5
+	mode_above.hover_throttle = 0.5
+	mode_below.max_thrust = 50.0
+	mode_above.max_thrust = 50.0
+
+	var tilted_basis := Basis(Vector3(1, 0, 0), _deg_to_rad(10))
+	var ang_vel := Vector3.ZERO
+	var deadzone: float = mode_below.input_deadzone
+
+	var result_below := mode_below.compute(0.0, deadzone - 0.01, 0.0, 0.0, tilted_basis, ang_vel, 0.016)
+	var result_above := mode_above.compute(0.0, deadzone + 0.01, 0.0, 0.0, tilted_basis, ang_vel, 0.016)
+
+	var delta: float = absf(result_above.pitch_diff - result_below.pitch_diff)
+	print("[TEST] pitch_diff below=", result_below.pitch_diff, " above=", result_above.pitch_diff, " delta=", delta)
+
+	var passed: bool = delta < 0.02
+	print("[TEST] ", "PASS" if passed else "FAIL", " — delta=", delta, " (expected < 0.02, continuous across old hard-switch boundary)")
 	return passed
 
 

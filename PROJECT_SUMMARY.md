@@ -152,43 +152,46 @@ full-deflection response.
 - `max_differential = 0.057` — rotor throttle offset per unit (expo'd) stick input
 - `yaw_torque_factor = 1.5` — Nm per unit yaw input
 
-### `scripts/drone/flight_mode_stabilized.gd` — Stabilized (120 lines)
+### `scripts/drone/flight_mode_stabilized.gd` — Stabilized (P6.6: compute-both-and-blend)
 
-Two sub-modes:
-- **Sticks active (>0.05 deadzone):** Rate mode — stick maps to target angular
-  velocity (max 1.5 rad/s pitch/roll, 1.0 rad/s yaw), PD drives toward target
-  with `rate_p_gain = 4.0`. Yaw uses direct stick-to-torque (same as acro),
-  no rate PD.
-- **Sticks centered:** PD auto-level using world-frame cross product
-  (body_up × world_up) → angle → linear P gain (no deadzone needed — it
-  tapers to zero as angle approaches 0 on its own). D gain always active,
-  driven off a one-pole low-pass-filtered gyro reading (`gyro_filter_alpha =
-  0.35`) rather than raw angular velocity, to kill PD limit-cycle jitter.
-  `stabilize_p_gain = 15.0`, `stabilize_d_gain = 4.0`.
-
-Two known control-law rough edges (symptoms flagged in AGENTS.md "Known
-Issues"; full rationale here):
-- **"Jump" when releasing stick near level.** Rate-mode and auto-level are
-  two entirely different laws — rate-PD on angular velocity
-  (`rate_p_gain = 4.0`) vs. angle-PD in the world frame
-  (`stabilize_p_gain = 15.0`, ~4× stronger gain-equivalent at the same tilt).
-  The switch at `input_deadzone = 0.05` is a hard binary swap with no
-  blending, so releasing the stick while still tilted produces a torque
-  discontinuity (a visible "snap" into level) as the controller jumps from a
-  modest rate-correction to a much more aggressive angle-correction. Compounded
-  by `drone_controller.gd::_apply_angular_damping()` damping the **raw**
-  angular velocity every tick, stacked on the mode's own D-term which uses the
-  **filtered** velocity — a brief mismatch at the switch instant. Likely fix:
-  blend the two laws across the deadzone instead of hard-switching.
-- **"Sticky" near level under active stick.** The gyro low-pass filter
-  (`gyro_filter_alpha = 0.35`, added to kill PD limit-cycle jitter) is reused
-  for the rate-mode branch's `rate_error = target_rate - local_ang_vel`, not
-  just the auto-level D-term, adding ~1–2 frames of lag to the pilot's own
-  feedback loop. Near level the commanded rates are already tiny, so the lag is
-  proportionally more noticeable there than under large fast inputs — reads as
-  sluggish. Likely fix: two separate filtered signals — heavily-filtered for
-  auto-level's D-term (noise rejection), raw/lightly-filtered for rate-mode's
-  feedback (responsiveness).
+Both control laws are computed every frame and cross-faded by stick
+deflection, rather than hard-switched at the deadzone:
+- **Rate law:** stick maps to target angular velocity (max 1.5 rad/s
+  pitch/roll, 1.0 rad/s yaw), PD drives toward target with `rate_p_gain =
+  4.0`. Feedback uses its **own** lightly-filtered `angular_velocity`
+  (`_filtered_ang_vel_rate`, one-pole low-pass with `rate_gyro_filter_alpha =
+  0.5`), converted to body frame — separate from the auto-level D filter
+  below. Raw gyro noise × `rate_p_gain` produced high-frequency attitude
+  jitter (FPV camera shake at medium stick / hard yaw); this filter is light
+  enough to kill that without reintroducing the old near-center lag. Yaw uses
+  direct stick-to-torque (same as acro), no rate PD, scaled by the blend
+  weight.
+- **Auto-level law:** PD auto-level using world-frame cross product (body_up
+  × world_up) → angle → linear P gain (no deadzone needed — it tapers to zero
+  as angle approaches 0 on its own). D gain driven off a separate, more
+  heavily one-pole low-pass-filtered gyro reading (`_filtered_ang_vel`,
+  `gyro_filter_alpha = 0.35`) to kill PD limit-cycle jitter — this heavier
+  filter would make the rate loop feel laggy, hence the two filters.
+  `stabilize_p_gain = 15.0`, `stabilize_d_gain = 4.0`. Contributes zero yaw.
+- **Blend:** `s = max(|pitch|, |roll|, |yaw|)`, `w = smoothstep(input_deadzone,
+  input_deadzone + blend_band, s)` with `blend_band = 0.2`. Final
+  `pitch_diff`/`roll_diff` = `lerp(level_value, rate_value, w)`; `yaw_torque =
+  w * yaw * 1.5`.
+- **"Jump" when releasing stick near level** — rate-PD (`rate_p_gain = 4.0`)
+  and angle-PD (`stabilize_p_gain = 15.0`, ~4× stronger gain-equivalent at the
+  same tilt) were hard-switched at `input_deadzone = 0.05` with no blending,
+  so releasing the stick while still tilted produced a torque discontinuity.
+  Now the two are cross-faded across `blend_band`, so there's no discontinuity
+  to snap through.
+- **"Sticky" near level under active stick** — the rate-mode branch used to
+  read the same low-pass-filtered gyro as the auto-level D-term, adding ~1–2
+  frames of lag that was proportionally worse for the small commanded rates
+  near level. Rate-mode feedback now reads its own lightly-filtered
+  `_filtered_ang_vel_rate` (`rate_gyro_filter_alpha = 0.5`); the heavier
+  `gyro_filter_alpha = 0.35` filter is reserved for the auto-level D-term only.
+  (Reading fully raw `angular_velocity` was tried first and fixed the
+  stickiness, but produced audible/visible FPV jitter from per-tick gyro
+  noise — the lighter dedicated filter above is the fix that stuck.)
 
 ### `scripts/drone/flight_mode_altitude_hold.gd` — Altitude Hold (assist, not a mode)
 
@@ -826,7 +829,9 @@ triggers, so the actions never fired on a real controller.
 | Stab rate_P gain | flight_mode_stabilized.gd | 4.0 |
 | Stab max rates | flight_mode_stabilized.gd | 1.5 / 1.5 / 1.0 rad/s |
 | Stab input deadzone | flight_mode_stabilized.gd | 0.05 |
-| Stab gyro_filter_alpha | flight_mode_stabilized.gd | 0.35 |
+| Stab blend_band | flight_mode_stabilized.gd | 0.2 |
+| Stab gyro_filter_alpha (auto-level D filter) | flight_mode_stabilized.gd | 0.35, range 0.0–1.0 |
+| Stab rate_gyro_filter_alpha (rate-loop filter) | flight_mode_stabilized.gd | 0.5, range 0.0–1.0 |
 | FPV rotation smoothing | chase_camera.gd | 0.92 |
 | Chase distance / height | chase_camera.gd | 2.2 m / 0.9 m |
 | Crash momentum threshold | drone_controller.gd | 8.0 kg·m/s |

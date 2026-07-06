@@ -91,6 +91,34 @@ var _gravity: float = 9.8
 # --- Flight modes ---
 var _flight_modes: Dictionary = {}
 var _current_mode: FlightModeBase = null
+## Stored so _sync_stabilized_gains() can push the exports below every tick —
+## FlightModeStabilized is RefCounted (created via .new()), so its own
+## @export vars never surface in any inspector. Same pattern as
+## SwarmManager's "Formation Gains" pushed into each FollowerPilot.
+var _stabilized: FlightModeStabilized = null
+
+## Pushed into the stabilized mode every physics tick (see
+## _sync_stabilized_gains()), so they're live-tunable in the inspector while
+## flying — mirrors SwarmManager's "Formation Gains" export group.
+@export_group("Stabilized Gains")
+## Stick-deflection span over which rate law and auto-level cross-fade, 0.0–0.5.
+@export var stabilized_blend_band: float = 0.2
+## Rate-loop gyro low-pass, 0.0–1.0 (lower = smoother/laggier, 1.0 = raw).
+@export var stabilized_rate_gyro_filter_alpha: float = 0.5
+## Auto-level D-term gyro low-pass, 0.0–1.0 (lower = smoother/laggier).
+@export var stabilized_gyro_filter_alpha: float = 0.35
+## Auto-level tilt-angle P gain.
+@export var stabilized_stabilize_p_gain: float = 15.0
+## Auto-level D gain (on the filtered gyro reading).
+@export var stabilized_stabilize_d_gain: float = 4.0
+## Rate-law P gain (target rate vs filtered angular velocity).
+@export var stabilized_rate_p_gain: float = 4.0
+## Max commanded pitch rate, rad/s.
+@export var stabilized_max_pitch_rate: float = 1.5
+## Max commanded roll rate, rad/s.
+@export var stabilized_max_roll_rate: float = 1.5
+## Max commanded yaw rate, rad/s.
+@export var stabilized_max_yaw_rate: float = 1.0
 
 # --- State ---
 enum State { FLYING, CRASHED }
@@ -164,6 +192,7 @@ func _ready() -> void:
 	stabilized.hover_throttle = hover_throttle
 	stabilized.max_thrust = max_thrust
 	_flight_modes["stabilized"] = stabilized
+	_stabilized = stabilized
 
 	_current_mode = _flight_modes[_flight_mode]
 
@@ -400,9 +429,28 @@ func _read_inputs() -> void:
 	_brake_engaged = Input.get_action_strength("brake_mode") > 0.5
 
 
+## Pushes the "Stabilized Gains" export block into the stored FlightModeStabilized
+## instance every physics tick — same live-tuning pattern as SwarmManager's
+## "Formation Gains" push into each FollowerPilot.
+func _sync_stabilized_gains() -> void:
+	if _stabilized == null:
+		return
+	_stabilized.blend_band = stabilized_blend_band
+	_stabilized.rate_gyro_filter_alpha = stabilized_rate_gyro_filter_alpha
+	_stabilized.gyro_filter_alpha = stabilized_gyro_filter_alpha
+	_stabilized.stabilize_p_gain = stabilized_stabilize_p_gain
+	_stabilized.stabilize_d_gain = stabilized_stabilize_d_gain
+	_stabilized.rate_p_gain = stabilized_rate_p_gain
+	_stabilized.max_pitch_rate = stabilized_max_pitch_rate
+	_stabilized.max_roll_rate = stabilized_max_roll_rate
+	_stabilized.max_yaw_rate = stabilized_max_yaw_rate
+
+
 func _compute_and_apply_forces(delta: float) -> void:
 	if _current_mode == null:
 		return
+
+	_sync_stabilized_gains()
 
 	var control: FlightModeBase.FlightControl = _current_mode.compute(
 		_throttle_input, _pitch_input, _roll_input, _yaw_input,

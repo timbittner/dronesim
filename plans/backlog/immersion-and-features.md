@@ -1,22 +1,8 @@
 # Immersion & Features
 
-- **UI Menu** — **promoted to P6** (`../2026-07-04_P6-swarm.md`):
-  DPad-controlled Forza-style strip driving swarm commands. Simulation-flag
-  toggles ("cheats", feed-switching) stay backlog — the P6 menu's data-driven
-  entry list is built to host them later.
-- **Quest/mission HUD** — deferred out of P5 to P6. P5 shipped mission
-  targets + a `MissionTracker` (`scripts/mission/`) and a MISSION SUCCESS
-  banner, but no proper objective list / progress panel. Build the HUD panel
-  that lists active `MissionTarget`s and their state.
-- **Payload physics** — **P7 candidate** (pushed from P6). Carrying a payload
-  should affect mass/CoG/handling, not just be a flag. Toggling/dropping is a
-  natural fit for the P6 DPad menu's entry list. Pairs with the payload-drop
-  `MissionTarget` type in [quests-and-scenarios.md](quests-and-scenarios.md).
 - **Multi-camera / gimbal** — a gimbal-stabilized camera feed separate from
   the airframe-locked FPV. Switching feeds is another DPad-menu candidate.
-- **UI color theme extraction** — the HUD palette (panel black 0.65α, text
-  green `0.35,1,0.35`, amber accent `1.0,0.72,0.1`, signal-lost red) is
-  hardcoded per-label across `debug_hud.gd` and `pad_menu.gd` (P6). Pull it
-  into one shared theme/constants file when a third UI surface appears.
+  Gimbal aiming would probably benefit from remapping brake/altitude hold 
+  to face buttons so that thumbs stay on sticks while operating gimbal.
 - **Sound simulation** — floated, but Tim is skeptical it's more than a
   gimmick. Low priority.

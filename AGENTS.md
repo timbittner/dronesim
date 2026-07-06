@@ -98,7 +98,7 @@ scripts/
     debug_hud.gd                 Telemetry + wind arrow + compass + banners + post shader + dispatch reticle/marker + event log (P6/P6.5)
     pad_menu.gd                  DPad swarm command menu + HUD toggle submenu (P6/P6.5)
   test/
-    flight_mode_test.gd          15 headless tests
+    flight_mode_test.gd          16 headless tests
     wind_field_test.gd           6 headless wind-field tests
     flight_recorder_test.gd      3 headless telemetry tests
     osm_terrain_test.gd          8 headless map/terrain tests (P4)
@@ -313,18 +313,6 @@ correct-looking `project.godot` entry, check this first.
   compensated. The headless test for this
   (`test_stabilized_roll_does_not_induce_yaw_spin`) only asserts the coupling
   stays bounded (<45° heading delta), not that it's absent.
-- **Stabilized mode "jump" when releasing stick near level**
-  (`flight_mode_stabilized.gd`): rate-mode and auto-level are two different
-  control laws, hard-switched at `input_deadzone` with no blending — releasing
-  the stick while still tilted can snap into level. Likely fix: blend the two
-  laws across the deadzone. Full rationale:
-  `PROJECT_SUMMARY.md → flight_mode_stabilized.gd`.
-- **Stabilized mode feels "sticky" near level under active stick input**
-  (`flight_mode_stabilized.gd`): the auto-level gyro low-pass filter is reused
-  for rate-mode's feedback, adding lag that's proportionally worse for the
-  small commanded rates near level. Likely fix: separate filtered signals for
-  the two paths. Full rationale:
-  `PROJECT_SUMMARY.md → flight_mode_stabilized.gd`.
 
 ## License
 
