@@ -364,6 +364,14 @@ On-screen overlay: flight mode, FPV status, altitude-hold/brake assist
 indicators, throttle %, stick inputs, heading/pitch/roll angles, speed,
 altitude. Compact log every 60 frames.
 
+**`scripts/ui/hud_theme.gd` (P6.6):** `class_name HUDTheme` — the shared color
+palette (panel bg, HUD green text, amber accent, alert red, success green,
+marker cyan, wind blue, gizmo axis colors) that `debug_hud.gd` and
+`pad_menu.gd` both reference instead of duplicating `Color(...)` literals.
+Alpha-variant / faded uses (e.g. compass tick fade, wind-speed alpha) still
+build a `Color` at the call site from the constant's RGB — only the palette
+values are centralized, not every literal.
+
 **Signal-loss overlay (Phase C):** on `crash_detected`, a pulsing red
 "⚠ SIGNAL LOST" banner appears and telemetry dims. The FPV *feed* dies at the
 crash instant: if the crash happened in FPV, the last rendered frame is captured

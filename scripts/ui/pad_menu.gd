@@ -387,7 +387,7 @@ func _swarm_manager() -> SwarmManager:
 func _build_ui() -> void:
 	var height := 64.0 + entries.size() * 24.0
 	_panel = ColorRect.new()
-	_panel.color = Color(0.0, 0.0, 0.0, 0.65)  # same panel black as the HUD
+	_panel.color = HUDTheme.PANEL  # same panel black as the HUD
 	_panel.anchor_left = 0.0
 	_panel.anchor_top = 1.0
 	_panel.anchor_right = 0.0
@@ -403,7 +403,7 @@ func _build_ui() -> void:
 	title.text = "SWARM COMMAND"
 	title.position = Vector2(10, 6)
 	title.add_theme_font_size_override("font_size", 13)
-	title.add_theme_color_override("font_color", Color(0.35, 1.0, 0.35))
+	title.add_theme_color_override("font_color", HUDTheme.TEXT)
 	_panel.add_child(title)
 
 	for i in entries.size():
@@ -417,7 +417,7 @@ func _build_ui() -> void:
 	_legend.text = "▲▼ select  ◀▶ change  ✕ apply/enter  ○ abort"
 	_legend.position = Vector2(10, 28 + entries.size() * 24 + 8)
 	_legend.add_theme_font_size_override("font_size", 10)
-	_legend.add_theme_color_override("font_color", Color(0.35, 1.0, 0.35, 0.5))
+	_legend.add_theme_color_override("font_color", Color(HUDTheme.TEXT.r, HUDTheme.TEXT.g, HUDTheme.TEXT.b, 0.5))
 	_panel.add_child(_legend)
 
 	# Closed-state hint line, same corner the panel opens in.
@@ -431,7 +431,7 @@ func _build_ui() -> void:
 	_hint.offset_right = 320
 	_hint.offset_bottom = -10
 	_hint.add_theme_font_size_override("font_size", 11)
-	_hint.add_theme_color_override("font_color", Color(0.35, 1.0, 0.35, 0.55))
+	_hint.add_theme_color_override("font_color", Color(HUDTheme.TEXT.r, HUDTheme.TEXT.g, HUDTheme.TEXT.b, 0.55))
 	add_child(_hint)
 
 
@@ -454,7 +454,7 @@ func _refresh() -> void:
 		else:
 			_rows[i].text = "%s %s" % [cursor, label]
 		_rows[i].add_theme_color_override("font_color",
-				Color(1.0, 0.72, 0.1) if i == selected else Color(0.35, 1.0, 0.35, 0.85))
+				HUDTheme.ACCENT if i == selected else Color(HUDTheme.TEXT.r, HUDTheme.TEXT.g, HUDTheme.TEXT.b, 0.85))
 
 
 ## Grow the row pool and panel/legend geometry to fit the current level's
