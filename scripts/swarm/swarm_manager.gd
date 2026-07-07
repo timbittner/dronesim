@@ -18,14 +18,11 @@ extends Node3D
 @export var spacing: float = 1.5
 ## RING / BOHR orbit radius, meters.
 @export var ring_radius: float = 4.0
-## Followers fly this many meters above the leader (0 = same altitude). The
-## script default stays >0 so that in a leaderless context (headless tests,
-## a manager sitting at ground level) followers hover clear of the ground
-## rather than being told to sit in the dirt. main.tscn overrides this to 0
-## for actual play: with a real airborne leader, followers ride at its
-## altitude, and the prop-obstruction contact-gate makes a grazing rotor tip
-## during a hard low tilt harmless (queries only fire on real body contact).
-@export var altitude_offset: float = 1.5
+## Followers fly this many meters above the leader (0 = same altitude, the
+## default — with a real airborne leader they ride at its altitude). Headless
+## tests that fly a follower to a slot near a ground-level manager set this
+## explicitly for clearance, the same way test_slot_tables sets it.
+@export var altitude_offset: float = 0.0
 ## BOHR orbital angular speed, rad/s.
 @export var bohr_speed: float = 1.2
 ## Seconds between backup spawns (menu: CALL BACKUP).

@@ -516,6 +516,10 @@ func test_follower_holds_and_reconverges() -> bool:
 	print("[TEST] --- test_follower_holds_and_reconverges ---")
 	var m := SwarmManager.new()
 	m.follower_count = 1
+	# Hold the slot 1.5 m up (manager sits at ground level here, with no
+	# airborne leader) so the follower isn't told to hover in the dirt — set
+	# explicitly like test_slot_tables does, rather than lean on the default.
+	m.altitude_offset = 1.5
 	add_child(m)
 	await get_tree().physics_frame  # deferred spawn
 	await get_tree().physics_frame
