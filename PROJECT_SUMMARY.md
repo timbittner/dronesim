@@ -802,7 +802,8 @@ of cycle `{label, options, getter, setter}` or action `{label, kind:"action",
 action}` dicts — labels may be Callables for live text (backup cooldown
 countdown, AUTO-LAND ↔ TAKE OFF toggle). Closed, DPad up/down sweeps the FPV
 cam tilt. Dead while the player is CRASHED. **HUD submenu (P6.5)** — one entry
-descends into a nested list (LOG/TELEMETRY/WIND/GIZMO/AXES toggles); BACK pops.
+descends into a nested list (LOG/TELEMETRY/WIND/GIZMO/AXES/ATTITUDE toggles);
+BACK pops.
 A small `_stack` of parent-level frames is the only new state.
 
 ### Dispatch reticle — `DebugHUD` (P6 additions)
@@ -817,7 +818,18 @@ follower (apex up/down by altitude relative to the player), pinned to the
 screen edge when off-view or behind the camera, labeled with its follower
 number. **On-screen event log (P6.5)** — `DebugHUD.log_line()` mirrors
 `SwarmManager._log()`'s console prints to a bottom-right panel (last 8 lines)
-so web builds without a console can see swarm/dispatch activity.
+so web builds without a console can see swarm/dispatch activity. **Attitude
+indicator (P6.6)** — `_on_attitude_draw` draws a classic instrument-style
+artificial horizon (bare white line work, no panel/background) centered on
+screen, FPV-only (`_drone.is_fpv_enabled()` gate, same as the reticle). Reads
+the airframe's own pitch/roll from `_drone.global_transform.basis.get_euler()`
+directly — camera tilt is deliberately ignored, it's an instrument, not a
+world-locked overlay. A fixed center winged-W marks the airframe's boresight;
+the horizon + ±10/20/30° pitch ladder rotate with roll and offset vertically
+with pitch (`ATTITUDE_PX_PER_DEG = 4.0`, tweakable), clipped to
+`ATTITUDE_LADDER_RADIUS` so it stays a compact instrument. Toggle:
+`show_attitude` (HUD submenu ATTITUDE entry), on by default, zero draw cost
+when off or outside FPV.
 
 ### `scripts/test/swarm_test.gd` — Swarm Headless Test Harness (P6)
 

@@ -179,6 +179,17 @@ func _build_hud_entries() -> Array[Dictionary]:
 					h.show_gizmo = (v == 0),
 		},
 		{
+			"label": "ATTITUDE",
+			"options": toggle_options,
+			"getter": func() -> int:
+				var h := _hud()
+				return 0 if h != null and h.show_attitude else 1,
+			"setter": func(v: int) -> void:
+				var h := _hud()
+				if h != null:
+					h.show_attitude = (v == 0),
+		},
+		{
 			"label": "PROP DBG",
 			"options": toggle_options,
 			"getter": func() -> int:

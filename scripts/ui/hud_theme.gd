@@ -14,3 +14,4 @@ const GIZMO_X := Color(1.0, 0.25, 0.25)            # world +X
 const GIZMO_Y := Color(0.25, 1.0, 0.25)            # world +Y
 const GIZMO_Z := Color(0.3, 0.5, 1.0)              # world +Z (back)
 const GIZMO_CENTER := Color(1, 1, 1, 0.6)          # gizmo center dot
+const INSTRUMENT := Color(1, 1, 1)                 # attitude indicator lines (P6.6)

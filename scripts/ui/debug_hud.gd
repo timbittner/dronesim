@@ -116,6 +116,16 @@ var show_gizmo: bool = true:
 		if _gizmo_panel != null:
 			_gizmo_panel.visible = value
 
+## Attitude indicator (P6.6 step 5): instrument-style artificial horizon,
+## FPV-only, reads the drone's airframe pitch/roll directly — camera tilt is
+## deliberately ignored (an instrument, not a world-locked overlay).
+var show_attitude: bool = true:
+	set(value):
+		show_attitude = value
+		if _attitude_canvas != null:
+			_attitude_canvas.visible = value
+var _attitude_canvas: Control
+
 var _gizmo_panel: ColorRect
 var _gizmo_canvas: Control
 var _coord_label: Label
@@ -213,6 +223,7 @@ func _process(delta: float) -> void:
 	_compass_canvas.queue_redraw()
 	_reticle_canvas.queue_redraw()
 	_marker_canvas.queue_redraw()
+	_attitude_canvas.queue_redraw()
 
 	_frame_count += 1
 	if _frame_count >= print_interval:
@@ -326,6 +337,80 @@ func _draw_marker_triangle(pos: Vector2, apex_up: bool) -> void:
 	var base_a := pos + Vector2(-7.0, -dy * 0.4)
 	var base_b := pos + Vector2(7.0, -dy * 0.4)
 	_marker_canvas.draw_colored_polygon(PackedVector2Array([tip, base_a, base_b]), MARKER_COLOR)
+
+
+# --- Attitude indicator (P6.6 step 5) ---
+# Classic instrument-style artificial horizon: reads the airframe's own pitch/
+# roll (NOT camera tilt — an instrument is world-referenced to the airframe,
+# not to wherever the pilot happens to be looking) and draws it centered on
+# screen. FPV-only, same gate as the dispatch reticle.
+const ATTITUDE_PX_PER_DEG: float = 10.0
+const ATTITUDE_LADDER_RADIUS: float = 180.0  # clip radius — keeps the ~±18° window at 2x scale
+const ATTITUDE_LADDER_HALF_WIDTH: float = 80.0  # rung half-length at the horizon
+const ATTITUDE_CENTER_MARK_SIZE: float = 40.0   # fixed winged-W half-span
+const ATTITUDE_HORIZON_GAP: float = 16.0        # center gap in the 0° line, for clean aiming
+
+
+func _on_attitude_draw() -> void:
+	if _drone == null or not show_attitude or not _drone.is_fpv_enabled():
+		return
+	var center := _attitude_canvas.get_size() * 0.5
+	var euler: Vector3 = _drone.global_transform.basis.get_euler()
+	var pitch_deg: float = rad_to_deg(euler.x)
+	var roll_deg: float = rad_to_deg(euler.z)
+
+	# Nose up (pitch_deg > 0) must push the horizon DOWN on screen (more sky
+	# above the fixed center mark) — standard artificial-horizon convention.
+	var pitch_offset: float = pitch_deg * ATTITUDE_PX_PER_DEG
+	# roll_deg is euler.z; verified against Basis math that rotating the ladder
+	# by +roll_deg (no sign flip) reproduces the real-horizon tilt seen during
+	# a physical bank (Godot's Y-up right-handed screen-space rotation already
+	# matches the world-horizon projection into the drone's local frame).
+	var roll_rad: float = deg_to_rad(roll_deg)
+
+	# Ladder rungs every 10° across the full ±170° range, each a horizontal tick
+	# offset by pitch then the whole assembly rotated about center by roll. The
+	# radius clip keeps only the rungs near the current attitude on screen, so
+	# the instrument stays a compact window while never running out of rungs.
+	for rung_deg in range(-170, 171, 10):
+		var y: float = pitch_offset - rung_deg * ATTITUDE_PX_PER_DEG
+		if absf(y) > ATTITUDE_LADDER_RADIUS:
+			continue
+		if rung_deg == 0:
+			# Horizon: wider, and split around center so the aircraft mark reads
+			# clean and steady aiming is easy.
+			var hw: float = ATTITUDE_LADDER_HALF_WIDTH * 1.4
+			var g: float = ATTITUDE_HORIZON_GAP
+			_draw_outlined_line(_attitude_canvas,
+				(Vector2(-hw, y)).rotated(roll_rad) + center,
+				(Vector2(-g, y)).rotated(roll_rad) + center, true)
+			_draw_outlined_line(_attitude_canvas,
+				(Vector2(g, y)).rotated(roll_rad) + center,
+				(Vector2(hw, y)).rotated(roll_rad) + center, true)
+			continue
+		var half_w: float = ATTITUDE_LADDER_HALF_WIDTH
+		var a := (Vector2(-half_w, y)).rotated(roll_rad) + center
+		var b := (Vector2(half_w, y)).rotated(roll_rad) + center
+		_draw_outlined_line(_attitude_canvas, a, b, false)
+		var label := "%d" % absi(rung_deg)
+		var label_pos := (Vector2(half_w + 14.0, y)).rotated(roll_rad) + center
+		_draw_centered(label, label_pos, HUDTheme.INSTRUMENT, _attitude_canvas)
+
+	# Fixed center reference (winged-W) — never moves with pitch/roll.
+	var s := ATTITUDE_CENTER_MARK_SIZE
+	_draw_outlined_line(_attitude_canvas, center + Vector2(-s, 0.0), center + Vector2(-s * 0.3, 0.0), false)
+	_draw_outlined_line(_attitude_canvas, center + Vector2(s * 0.3, 0.0), center + Vector2(s, 0.0), false)
+	_draw_outlined_line(_attitude_canvas, center + Vector2(-s * 0.3, 0.0), center + Vector2(0.0, s * 0.35), false)
+	_draw_outlined_line(_attitude_canvas, center + Vector2(0.0, s * 0.35), center + Vector2(s * 0.3, 0.0), false)
+	_attitude_canvas.draw_circle(center, 2.0, HUDTheme.INSTRUMENT)
+
+
+## Dark outline pass underneath a white instrument line (same technique as the
+## wind arrow, _on_wind_draw), so it reads against both sky and ground.
+func _draw_outlined_line(canvas: Control, a: Vector2, b: Vector2, bold: bool) -> void:
+	var w: float = 2.4 if bold else 1.6  # ~20% thinner than the first cut
+	canvas.draw_line(a, b, HUDTheme.OUTLINE, w + 2.0, false)
+	canvas.draw_line(a, b, HUDTheme.INSTRUMENT, w, false)
 
 
 func _on_crash_detected() -> void:
@@ -508,7 +593,7 @@ func _build_ui() -> void:
 	_bg = ColorRect.new()
 	_bg.color = HUDTheme.PANEL
 	_bg.set_anchors_preset(Control.PRESET_TOP_LEFT)
-	_bg.offset_right = 280.0
+	_bg.offset_right = 192.0
 	_bg.offset_bottom = 374.0  # fits the telemetry text incl. AGL + signal lines
 	_bg.offset_left = 8.0
 	_bg.offset_top = 8.0
@@ -620,6 +705,14 @@ func _build_ui() -> void:
 	_marker_canvas.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_marker_canvas.draw.connect(_on_marker_draw)
 	add_child(_marker_canvas)
+
+	# Attitude indicator: full-rect canvas, bare instrument line work centered
+	# on screen, FPV-only (same pattern as the reticle/marker canvases).
+	_attitude_canvas = Control.new()
+	_attitude_canvas.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_attitude_canvas.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_attitude_canvas.draw.connect(_on_attitude_draw)
+	add_child(_attitude_canvas)
 
 	# Event log, bottom-right corner — right-aligned, grows upward.
 	_log_label = Label.new()
