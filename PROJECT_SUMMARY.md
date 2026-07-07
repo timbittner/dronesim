@@ -650,6 +650,20 @@ speed against drag, ~30 m/s at 1.0 rad) → stabilized-style restoring torque;
 altitude PD with vertical feed-forward; heading PD → yaw torque. Two bypasses:
 `landed` (idle throttle on the ground) and `strike` (kamikaze — see below).
 
+**AGL sink-rate cap (P6.6)** — the altitude PD alone has no ground awareness:
+a target far below the follower (e.g. a CALL BACKUP spawn 5 m over the pad
+while the formation target sits down in a valley) drives collective to its
+0.05 floor and free-falls. `ground_y` (terrain height under the drone,
+pushed by `FollowerPilot` every tick from `_ground_below()`) feeds an AGL
+figure the PD block doesn't otherwise have. After the PD computes
+`result.collective`, a cap kicks in: `sink_cap = max(min_sink_rate, agl *
+agl_sink_gain)` — high at altitude (long descents untouched), low near the
+ground. If the actual descent rate exceeds the cap, collective is raised
+(never lowered) to arrest it: `hover_throttle + (sink - sink_cap) *
+sink_arrest_gain`. `landed` and `strike` both return before this block —
+still exempt (a kamikaze strike is a deliberate powered dive, not a
+free-fall to arrest).
+
 ### `scripts/swarm/follower_pilot.gd` — Per-follower behavior
 
 One pilot node per follower (individual pilots, not a manager loop, so behaviors
@@ -664,13 +678,46 @@ stale. `_on_drone_crashed → DOWN` (a wreck; CALL BACKUP replaces it).
   following, floored at `observe_altitude` so it clears obstacles), then per
   type: OBSERVE / bare point → hover and loiter, then rejoin; CRASH → **kamikaze
   strike**.
-- **Kamikaze strike (powered dive, P6.5)** — once within `dive_radius` of a
-  live CRASH target, `_mode.strike` aims the body-up vector straight at
-  `strike_target` (refreshed live while the target exists) and holds full
-  collective — no tilt clamp, deliberately reckless. Impact momentum clears
-  the CRASH target on hit; `lose_signal()` after `STRIKE_TIMEOUT` remains a
-  safety net for a dive that skims past instead of connecting. Still
-  rotor-only — thrust is the weapon, not an applied impulse.
+- **Kamikaze glideslope run-in (P6.6)** — `_dispatch_aim()`'s cruise altitude
+  for a live CRASH target is `min(cruise_alt, target.y + horiz * tan(dive_angle_deg))`,
+  floored at `target.y + strike_altitude`: identical to the old flat cruise
+  beyond the slope-intercept distance, but inside it the aim point drops onto
+  a descending slope toward the target while still horizontally closing — no
+  more flying directly overhead and nulling speed before the dive
+  verticalizes. The floor means the glideslope now levels off at
+  `strike_altitude` above the target instead of running down to its ground
+  level, and a follower dispatched low climbs up to that floor first. Once
+  the aim point is actually on the slope (not the flat cruise), `_fly_dispatch`
+  also feeds the horizontal approach direction into `_mode.target_velocity`
+  (vertical left at zero — the altitude PD's own D term against
+  `current_velocity.y` already handles descent; guessing a vertical rate here
+  would fight it) so the position cascade doesn't brake to a hover at the aim
+  point.
+- **Climb-to-strike-altitude gate (P6.6 fix)** — the terminal strike
+  (`_strike()`) aims thrust straight AT the target with no tilt clamp; from
+  low AGL and short range that vector is near-horizontal or even downward,
+  so the attitude law rolls toward inverted with no room to recover and the
+  drone tumbles into the ground. `_fly_dispatch` now requires
+  `drone.global_position.y - target.y >= strike_altitude - 2.0` (a ~2 m
+  tolerance) before EITHER commit path (the base `horiz_dist < dive_radius`
+  or the earlier descending-and-aligned path below) is allowed to latch
+  `_plunging` — a follower dispatched too low keeps flying the (now
+  climbing) aim instead of committing until it has genuine vertical room.
+- **Earlier strike commit (P6.6)** — `_fly_dispatch` still commits to the
+  terminal dive inside `dive_radius` (once the altitude gate above is
+  satisfied), but also commits earlier, out to `2 * dive_radius`, when
+  velocity is already descending (`vel.y < -0.5`) and points within ~25° of
+  the straight line to the target
+  (`vel.normalized().dot(over.normalized()) > cos(25°)`) — lets the powered
+  dive pick up exactly where the glideslope run-in left off instead of always
+  waiting to cross inside `dive_radius`.
+- **Kamikaze strike (powered dive, P6.5)** — once committed, `_mode.strike`
+  aims the body-up vector straight at `strike_target` (refreshed live while
+  the target exists) and holds full collective — no tilt clamp, deliberately
+  reckless. Impact momentum clears the CRASH target on hit; `lose_signal()`
+  after `STRIKE_TIMEOUT` remains a safety net for a dive that skims past
+  instead of connecting. Still rotor-only — thrust is the weapon, not an
+  applied impulse.
 - **Auto-land** — `LANDING` freezes horizontal position + heading and ramps the
   target down at `descent_rate` to `ground_height`, cuts motors on touchdown
   (`LANDED`). The player lands too via a transient pilot (`setup_landing`) that
@@ -706,12 +753,18 @@ so web builds without a console can see swarm/dispatch activity.
 
 ### `scripts/test/swarm_test.gd` — Swarm Headless Test Harness (P6)
 
-13 tests: slot-table math per formation, control-law signs, integral drift-trim,
+15 tests: slot-table math per formation, control-law signs, integral drift-trim,
 pilot dropout freeze, velocity feed-forward, pad-menu state machine (incl. HUD
 submenu descend/back), dispatch selection + per-type aim + powered-dive
 arming, backup cooldown, player auto-land handoff, pad-slot spacing, and
-three bounded flight tests (a follower ground-starts then holds/reconverges;
-auto-land settles + takes off; kamikaze impact clears a CRASH target).
+five bounded flight tests (a follower ground-starts then holds/reconverges;
+auto-land settles + takes off; kamikaze impact clears a CRASH target; kamikaze
+glideslope arrives already descending on a slope — not just `vel.y < 0` —
+before crossing inside `dive_radius`, sampled from a high dispatch altitude so
+the slope has room to bite; a follower dispatched from LOW AGL close to a
+CRASH target climbs to `strike_altitude` above it — polled via `_plunging`
+staying false until the drop is gained — before ever committing to the dive,
+and still clears the target).
 
 Run: `godot --headless --path . scenes/test/swarm_test_scene.tscn`
 
@@ -860,3 +913,8 @@ triggers, so the actions never fired on a real controller.
 | WindParticles streak_count | wind_particles.gd | 300 |
 | WindParticles volume_extents | wind_particles.gd | (45, 25, 45) m |
 | WindParticles resample_interval | wind_particles.gd | 4 frames |
+| Kamikaze dive_angle_deg (glideslope) | follower_pilot.gd | 35.0°, range ~15–60° |
+| Kamikaze strike_altitude (climb-before-dive floor) | follower_pilot.gd | 6.0 m, range ~6–20 |
+| Sink cap min_sink_rate | flight_mode_formation.gd | 2.0 m/s, range ~1.5–4 |
+| Sink cap agl_sink_gain | flight_mode_formation.gd | 0.5, range ~0.2–1.0 |
+| Sink cap sink_arrest_gain | flight_mode_formation.gd | 0.1, range ~0.05–0.3 |

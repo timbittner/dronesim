@@ -47,6 +47,15 @@ enum Formation { LINE, V, RING, BOHR }
 ## Max thrust-direction tilt, rad — sets the terminal speed against drag
 ## (v = g·tan(max_tilt)·mass/drag_c ≈ 30 m/s at 1.0), not just agility.
 @export var max_tilt: float = 1.0
+## Sink rate always allowed regardless of AGL, m/s. Keep at/above descent_rate
+## (1.5) so a normal landing never fights the cap. Range ~1.5 to 4.
+@export var min_sink_rate: float = 2.0
+## Extra allowed sink per metre of AGL — higher permits steeper descents.
+## Range ~0.2 to 1.0.
+@export var agl_sink_gain: float = 0.5
+## Collective added per m/s of over-cap sink when arresting a too-fast
+## descent near the ground. Range ~0.05 to 0.3.
+@export var sink_arrest_gain: float = 0.1
 
 ## Pushed into every pilot each physics tick, like the gains — pilots are
 ## built in code, so these are their only inspector knobs.
@@ -105,7 +114,8 @@ func _ready() -> void:
 func _physics_process(delta: float) -> void:
 	_time += delta
 	for pilot in pilots:
-		pilot.apply_gains(pos_p_gain, pos_i_gain, vel_p_gain, max_speed, max_tilt)
+		pilot.apply_gains(pos_p_gain, pos_i_gain, vel_p_gain, max_speed, max_tilt,
+				min_sink_rate, agl_sink_gain, sink_arrest_gain)
 		pilot.dive_radius = dive_radius
 		pilot.observe_altitude = observe_altitude
 		pilot.loiter_time = loiter_time

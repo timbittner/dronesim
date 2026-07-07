@@ -63,6 +63,16 @@ var descent_rate: float = 1.5
 ## ground-level handoff dumped player and followers into each other.
 var release_altitude: float = 5.0
 
+## Glideslope angle of the kamikaze run-in, degrees. Range roughly 15 to 60;
+## shallower means a longer descending approach, steeper means more vertical.
+@export var dive_angle_deg: float = 35.0
+
+## Height (m) above a CRASH target the follower dives from. A low dispatch
+## climbs to it first; a high glideslope levels off there before the dive —
+## guarantees the terminal strike always has vertical room, since it aims
+## thrust straight at the target with no tilt clamp. Range roughly 6 to 20.
+@export var strike_altitude: float = 6.0
+
 ## Auto-land target: frozen horizontal position, ramping y.
 var _land_pos: Vector3 = Vector3.ZERO
 ## Dispatch cruise height above ground — captured at dispatch time (AGL).
@@ -93,7 +103,8 @@ func setup(follower: DroneController, swarm_manager: Node, index: int) -> void:
 
 ## Live gain push from the SwarmManager's Formation Gains exports (each tick,
 ## so remote-inspector tuning takes effect immediately).
-func apply_gains(pos_p: float, pos_i: float, vel_p: float, speed: float, tilt: float) -> void:
+func apply_gains(pos_p: float, pos_i: float, vel_p: float, speed: float, tilt: float,
+		min_sink: float, agl_sink: float, sink_arrest: float) -> void:
 	if _mode == null:
 		return
 	_mode.pos_p_gain = pos_p
@@ -101,6 +112,9 @@ func apply_gains(pos_p: float, pos_i: float, vel_p: float, speed: float, tilt: f
 	_mode.vel_p_gain = vel_p
 	_mode.max_speed = speed
 	_mode.max_tilt = tilt
+	_mode.min_sink_rate = min_sink
+	_mode.agl_sink_gain = agl_sink
+	_mode.sink_arrest_gain = sink_arrest
 
 
 ## Fire-and-forget dispatch order: fly to `point`; `target` (may be null) is
@@ -125,6 +139,13 @@ func dispatch(point: Vector3, target: MissionTarget) -> void:
 ## until dive_radius from the goal, then descend onto it (straight at a live
 ## CRASH target; hover height above everything else). A low direct line
 ## clipped trees/buildings en route.
+##
+## Kamikaze run-in is a glideslope, not a flat cruise-then-drop: the aim
+## altitude follows min(cruise_alt, target.y + horiz * tan(dive_angle_deg))
+## so beyond the slope-intercept distance it's identical to the old flat
+## cruise, but inside it the follower is already descending toward the
+## target while still closing horizontally — no more hovering overhead to
+## null speed before the terminal dive verticalizes.
 func _dispatch_aim() -> Vector3:
 	var kamikaze := is_instance_valid(_dispatch_target) \
 			and _dispatch_target.type == MissionTarget.Type.CRASH \
@@ -134,9 +155,14 @@ func _dispatch_aim() -> Vector3:
 	var to := goal - drone.global_position
 	var horiz := Vector2(to.x, to.z).length()
 	if kamikaze:
-		# Cruise above terrain until close enough for _fly_dispatch to commit to
-		# a powered terminal dive.
-		return Vector3(goal.x, _ground_below() + _cruise_agl, goal.z)
+		var cruise_alt: float = _ground_below() + _cruise_agl
+		var slope_alt: float = goal.y + horiz * tan(deg_to_rad(dive_angle_deg))
+		# Floored at strike_altitude above the target: the glideslope still
+		# descends from a high dispatch but levels off there instead of running
+		# the target's own ground level, and a low dispatch climbs up to it —
+		# guarantees the terminal strike always has vertical room to dive.
+		var aim_y := maxf(minf(cruise_alt, slope_alt), goal.y + strike_altitude)
+		return Vector3(goal.x, aim_y, goal.z)
 	if horiz > dive_radius:
 		return Vector3(goal.x, maxf(_ground_below() + _cruise_agl, goal.y), goal.z)
 	return goal
@@ -242,6 +268,7 @@ func _physics_process(delta: float) -> void:
 	# Onboard sensors: always fresh, packet loss does not touch these.
 	_mode.current_position = drone.global_position
 	_mode.current_velocity = drone.linear_velocity
+	_mode.ground_y = _ground_below()  # AGL reference for the sink-rate cap
 
 	if behavior == Behavior.DISPATCHED:
 		_fly_dispatch(delta)
@@ -282,7 +309,27 @@ func _physics_process(delta: float) -> void:
 func _fly_dispatch(delta: float) -> void:
 	var aim := _dispatch_aim()
 	_mode.target_position = aim
-	_mode.target_velocity = Vector3.ZERO
+
+	# Kamikaze glideslope: once the aim point has dropped onto the slope (not
+	# just the flat cruise), feed the horizontal approach direction into the
+	# velocity feed-forward so the position cascade doesn't brake to null
+	# horizontal speed while it's still descending toward the target — it
+	# keeps closing instead of hovering overhead first. Horizontal-only: the
+	# altitude PD's own D term (vs. actual current_velocity.y) already handles
+	# the vertical descent; feeding a guessed vertical rate in here would just
+	# fight it.
+	var kamikaze := is_instance_valid(_dispatch_target) \
+			and _dispatch_target.type == MissionTarget.Type.CRASH \
+			and not _dispatch_target.cleared
+	var on_slope := kamikaze and aim.y < drone.global_position.y - 0.1
+	if on_slope and not _plunging:
+		var approach_h := Vector3(aim.x - drone.global_position.x, 0.0,
+				aim.z - drone.global_position.z)
+		var speed: float = Vector2(drone.linear_velocity.x, drone.linear_velocity.z).length()
+		_mode.target_velocity = approach_h.normalized() * speed \
+				if approach_h.length_squared() > 1.0e-6 else Vector3.ZERO
+	else:
+		_mode.target_velocity = Vector3.ZERO
 
 	if _plunging:
 		# Terminal strike: full-throttle at the live target; keep the last point
@@ -297,12 +344,29 @@ func _fly_dispatch(delta: float) -> void:
 			drone.lose_signal()
 		return
 
-	# Commit once close enough horizontally; the strike law handles the dive.
+	# Commit once close enough horizontally, OR earlier if already lined up on
+	# the glideslope: velocity pointed within ~25 deg of the target line,
+	# descending, and inside ~2x dive_radius — lets the powered dive pick up
+	# where the run-in left off instead of waiting to fly directly overhead.
+	# Either path is gated on having strike_altitude of drop over the target
+	# first — the strike law aims thrust straight AT the target with no tilt
+	# clamp, so committing from low AGL leaves no room and it tumbles.
 	if is_instance_valid(_dispatch_target) \
 			and _dispatch_target.type == MissionTarget.Type.CRASH \
 			and not _dispatch_target.cleared:
 		var over := _dispatch_target.global_position - drone.global_position
-		if Vector2(over.x, over.z).length() < dive_radius:
+		var horiz_dist := Vector2(over.x, over.z).length()
+		var drop := drone.global_position.y - _dispatch_target.global_position.y
+		var has_drop := drop >= strike_altitude - 2.0
+		var commit := has_drop and horiz_dist < dive_radius
+		if not commit and has_drop and horiz_dist < dive_radius * 2.0:
+			var vel := drone.linear_velocity
+			if vel.length_squared() > 1.0e-6 and over.length_squared() > 1.0e-6:
+				var descending: bool = vel.y < -0.5
+				var aligned: bool = vel.normalized().dot(over.normalized()) \
+						> cos(deg_to_rad(25.0))
+				commit = descending and aligned
+		if commit:
 			_plunging = true
 			_mode.strike_target = _dispatch_target.global_position
 			_mode.strike = true

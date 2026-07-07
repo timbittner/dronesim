@@ -51,7 +51,10 @@ func _run_all_tests() -> void:
 	await _run_test("test_follower_holds_and_reconverges")
 	await _run_test("test_autoland_settles_and_takes_off")
 	await _run_test("test_kamikaze_clears_crash_target")
+	await _run_test("test_kamikaze_arrives_descending")
 	await _run_test("test_pad_slots")
+	await _run_test("test_descent_cap_prevents_ground_crash")
+	await _run_test("test_kamikaze_climbs_before_low_strike")
 
 	var total := _passed + _failed
 	print("[TEST] ========================================")
@@ -633,6 +636,73 @@ func test_kamikaze_clears_crash_target() -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Glideslope run-in (P6.6 step 2): a dispatched kamikaze must already be
+# descending on a slope — not flat — by the time it crosses inside
+# dive_radius horizontally. Sampled just outside dive_radius, the descent
+# rate must clear tan(20°) * horizontal_speed (a bare "vel.y < 0" check can
+# pass on plain terrain-following wobble; this asserts the slope itself).
+# ---------------------------------------------------------------------------
+func test_kamikaze_arrives_descending() -> bool:
+	print("[TEST] --- test_kamikaze_arrives_descending ---")
+	var m := SwarmManager.new()
+	m.follower_count = 1
+	add_child(m)
+	var t := MissionTarget.new()
+	t.type = MissionTarget.Type.CRASH
+	t.radius = 6.0
+	add_child(t)
+	t.global_position = Vector3(60, 0.9, 0)
+	await get_tree().physics_frame
+	await get_tree().physics_frame
+	if m.pilots.size() != 1:
+		printerr("[TEST] no follower spawned")
+		m.queue_free()
+		t.queue_free()
+		return false
+	var pilot: FollowerPilot = m.pilots[0]
+
+	pilot.takeoff()  # ground-start spawn parks LANDED — lift off before dispatch
+	for i in range(60):
+		await get_tree().physics_frame
+	# Cruise from altitude (like a formation slot far above the target) so the
+	# glideslope has room to bite before dive_radius — a follower dispatched
+	# from just a few meters AGL has no slope to speak of, which is expected
+	# geometry (see _dispatch_aim doc), not a bug.
+	pilot.drone.global_position.y = 40.0
+	pilot.drone.linear_velocity = Vector3.ZERO
+	pilot.dispatch(t.global_position, t)
+
+	var sampled := false
+	var slope_ok := false
+	var sample_horiz := 0.0
+	var sample_vy := 0.0
+	var cleared := false
+	for i in range(600):  # up to 10 s for the run
+		await get_tree().physics_frame
+		var over: Vector3 = t.global_position - pilot.drone.global_position
+		var horiz: float = Vector2(over.x, over.z).length()
+		if not sampled and horiz < pilot.dive_radius + 1.0:
+			sampled = true
+			sample_horiz = horiz
+			sample_vy = pilot.drone.linear_velocity.y
+			var vel := pilot.drone.linear_velocity
+			var horiz_speed: float = Vector2(vel.x, vel.z).length()
+			slope_ok = (-vel.y) >= tan(deg_to_rad(20.0)) * horiz_speed
+		if pilot.behavior == FollowerPilot.Behavior.DOWN:
+			cleared = t.cleared
+			break
+
+	print("[TEST] sampled=%s horiz=%.1f vy=%.2f slope_ok=%s cleared=%s"
+			% [sampled, sample_horiz, sample_vy, slope_ok, cleared])
+	m.queue_free()
+	t.queue_free()
+	var passed := sampled and slope_ok and cleared
+	print("[TEST] ", "PASS" if passed else "FAIL",
+			" — kamikaze already descending on a slope before dive_radius, still clears")
+	return passed
+
+
+# ---------------------------------------------------------------------------
 # Launch-pad slot table: the 8 pad cells are unique and spaced at least
 # PAD_PITCH apart (the 2×2 pad only has room for these 8 — anything beyond
 # spawns airborne in its formation slot instead, checked elsewhere).
@@ -659,4 +729,115 @@ func test_pad_slots() -> bool:
 	m.queue_free()
 	var passed := spaced_ok
 	print("[TEST] ", "PASS" if passed else "FAIL", " — 8 unique, spaced pad slots")
+	return passed
+
+
+# ---------------------------------------------------------------------------
+# Sink-rate cap (P6.6): a follower commanded to a target far below (e.g. a
+# CALL BACKUP spawn 5 m over the pad while the leader/formation target sits
+# at ground level) must NOT free-fall — without the AGL sink cap, the
+# altitude PD's huge negative error clamps collective to its 0.05 floor and
+# gravity does the rest, tumbling the drone into a crash on touchdown. With
+# the cap, the descent is arrested near the ground: the drone settles onto
+# flat ground (min y stays ~0) instead of crashing into it.
+# ---------------------------------------------------------------------------
+func test_descent_cap_prevents_ground_crash() -> bool:
+	print("[TEST] --- test_descent_cap_prevents_ground_crash ---")
+	var m := SwarmManager.new()
+	m.follower_count = 1
+	add_child(m)
+	await get_tree().physics_frame  # deferred spawn
+	await get_tree().physics_frame
+	if m.pilots.size() != 1:
+		printerr("[TEST] no follower spawned")
+		m.queue_free()
+		return false
+	var pilot: FollowerPilot = m.pilots[0]
+	var follower: DroneController = pilot.drone
+
+	pilot.takeoff()  # off the ground-start park so the formation mode drives it
+	# Place it high over flat ground (ground_y = 0 with no Terrain node) and
+	# command a target near the ground, far below — the free-fall scenario.
+	follower.global_position = Vector3(0, 5, 0)
+	follower.linear_velocity = Vector3.ZERO
+	pilot._mode.target_position = Vector3(0, 0.3, 0)
+	pilot._mode.target_velocity = Vector3.ZERO
+
+	var min_y := follower.global_position.y
+	for i in range(300):  # 5 s: enough to descend and settle
+		await get_tree().physics_frame
+		min_y = minf(min_y, follower.global_position.y)
+		if pilot.behavior == FollowerPilot.Behavior.DOWN:
+			break
+
+	var not_crashed: bool = not follower.is_crashed() \
+			and pilot.behavior != FollowerPilot.Behavior.DOWN
+	var no_ground_penetration: bool = min_y > -0.5
+	var settled_near_target: bool = absf(follower.global_position.y - 0.3) < 1.5
+
+	print("[TEST] min_y=%.2f not_crashed=%s no_penetration=%s settled=%s"
+			% [min_y, not_crashed, no_ground_penetration, settled_near_target])
+	m.queue_free()
+	var passed := not_crashed and no_ground_penetration and settled_near_target
+	print("[TEST] ", "PASS" if passed else "FAIL",
+			" — sink-rate cap arrests descent near ground, no free-fall crash")
+	return passed
+
+
+# ---------------------------------------------------------------------------
+# Low-altitude kamikaze (P6.6 fix): a follower dispatched from LOW AGL close
+# to a CRASH target has no room for the powered-dive attitude law (it aims
+# thrust AT the target — near-horizontal/downward from low altitude — and
+# tumbles). The follower must gain strike_altitude of drop over the target
+# BEFORE it ever commits (_plunging), climbing first if dispatched low.
+# Regression guard: without the climb-first fix, commit fires almost
+# immediately with near-zero drop.
+# ---------------------------------------------------------------------------
+func test_kamikaze_climbs_before_low_strike() -> bool:
+	print("[TEST] --- test_kamikaze_climbs_before_low_strike ---")
+	var m := SwarmManager.new()
+	m.follower_count = 1
+	add_child(m)
+	var t := MissionTarget.new()
+	t.type = MissionTarget.Type.CRASH
+	t.radius = 6.0
+	add_child(t)
+	t.global_position = Vector3(10, 0.0, 0)
+	await get_tree().physics_frame
+	await get_tree().physics_frame
+	if m.pilots.size() != 1:
+		printerr("[TEST] no follower spawned")
+		m.queue_free()
+		t.queue_free()
+		return false
+	var pilot: FollowerPilot = m.pilots[0]
+
+	pilot.takeoff()  # ground-start spawn parks LANDED — lift off before dispatch
+	for i in range(60):
+		await get_tree().physics_frame
+	# LOW AGL, close to the target — the tumble scenario from the bug report.
+	pilot.drone.global_position = Vector3(3, 3.0, 0)
+	pilot.drone.linear_velocity = Vector3.ZERO
+	pilot.dispatch(t.global_position, t)
+
+	var max_drop_before_plunge := -INF
+	var cleared := false
+	for i in range(600):  # up to 10 s
+		await get_tree().physics_frame
+		if not pilot._plunging:
+			var drop: float = pilot.drone.global_position.y - t.global_position.y
+			max_drop_before_plunge = maxf(max_drop_before_plunge, drop)
+		if pilot.behavior == FollowerPilot.Behavior.DOWN:
+			cleared = t.cleared
+			break
+
+	var gained_altitude: bool = max_drop_before_plunge >= pilot.strike_altitude - 2.0
+
+	print("[TEST] max_drop_before_plunge=%.2f strike_altitude=%.1f cleared=%s"
+			% [max_drop_before_plunge, pilot.strike_altitude, cleared])
+	m.queue_free()
+	t.queue_free()
+	var passed := gained_altitude and cleared
+	print("[TEST] ", "PASS" if passed else "FAIL",
+			" — low dispatch climbs to strike_altitude before committing, still clears")
 	return passed
