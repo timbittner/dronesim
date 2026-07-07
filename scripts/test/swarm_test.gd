@@ -55,6 +55,7 @@ func _run_all_tests() -> void:
 	await _run_test("test_pad_slots")
 	await _run_test("test_descent_cap_prevents_ground_crash")
 	await _run_test("test_kamikaze_climbs_before_low_strike")
+	await _run_test("test_stranded_follower_self_destructs")
 
 	var total := _passed + _failed
 	print("[TEST] ========================================")
@@ -840,4 +841,45 @@ func test_kamikaze_climbs_before_low_strike() -> bool:
 	var passed := gained_altitude and cleared
 	print("[TEST] ", "PASS" if passed else "FAIL",
 			" — low dispatch climbs to strike_altitude before committing, still clears")
+	return passed
+
+
+# ---------------------------------------------------------------------------
+# Stranded self-destruct (P6.6 step 3): a flying follower with all 4 rotors
+# force-disabled (simulating a tumble that clips every prop) must self-destruct
+# after stranded_timeout — DOWN, removed from m.pilots, so CALL BACKUP can
+# replace it instead of it littering the field forever. Timeout lowered on the
+# pilot to keep this fast.
+# ---------------------------------------------------------------------------
+func test_stranded_follower_self_destructs() -> bool:
+	print("[TEST] --- test_stranded_follower_self_destructs ---")
+	var m := SwarmManager.new()
+	m.follower_count = 1
+	add_child(m)
+	await get_tree().physics_frame
+	await get_tree().physics_frame
+	if m.pilots.size() != 1:
+		printerr("[TEST] no follower spawned")
+		m.queue_free()
+		return false
+	var pilot: FollowerPilot = m.pilots[0]
+	pilot.stranded_timeout = 0.3  # fast test — well under the 10s default
+	pilot.takeoff()  # ground-start spawn parks LANDED — must be flying first
+	for i in range(30):
+		await get_tree().physics_frame
+
+	pilot.drone._prop_state = [2, 2, 2, 2]  # all rotors force-broken
+
+	var removed := false
+	for i in range(60):  # ~1s at 60Hz — more than enough past the 0.3s timeout
+		await get_tree().physics_frame
+		if not is_instance_valid(pilot) or not m.pilots.has(pilot):
+			removed = true
+			break
+
+	print("[TEST] removed=%s pilots_left=%d" % [removed, m.pilots.size()])
+	m.queue_free()
+	var passed := removed
+	print("[TEST] ", "PASS" if passed else "FAIL",
+			" — stranded follower self-destructs and is removed from the roster")
 	return passed

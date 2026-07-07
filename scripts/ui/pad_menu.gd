@@ -73,20 +73,9 @@ func _install_glyph_fallback() -> void:
 func _build_entries() -> void:
 	entries = [
 		{
-			"label": "FORMATION",
-			"options": func() -> Array: return SwarmManager.Formation.keys(),
-			"getter": func() -> int:
-				var m := _swarm_manager()
-				return m.formation if m != null else 0,
-			"setter": func(v: int) -> void:
-				var m := _swarm_manager()
-				if m != null:
-					m.formation = v as SwarmManager.Formation
-					print("[Swarm] formation: %s" % SwarmManager.Formation.keys()[v]),
-		},
-		{
 			# Toggles: lands the whole swarm (player included) in place, or
 			# sends everyone back up. Label is a Callable — resolved on refresh.
+			# First entry: it's used far more often than FORMATION.
 			"label": func() -> String:
 				var m := _swarm_manager()
 				return "TAKE OFF" if m != null and m.swarm_landing() else "AUTO-LAND",
@@ -99,6 +88,18 @@ func _build_entries() -> void:
 					m.take_off_all()
 				else:
 					m.land_all(),
+		},
+		{
+			"label": "FORMATION",
+			"options": func() -> Array: return SwarmManager.Formation.keys(),
+			"getter": func() -> int:
+				var m := _swarm_manager()
+				return m.formation if m != null else 0,
+			"setter": func(v: int) -> void:
+				var m := _swarm_manager()
+				if m != null:
+					m.formation = v as SwarmManager.Formation
+					print("[Swarm] formation: %s" % SwarmManager.Formation.keys()[v]),
 		},
 		{
 			"label": func() -> String:
@@ -176,6 +177,19 @@ func _build_hud_entries() -> Array[Dictionary]:
 				var h := _hud()
 				if h != null:
 					h.show_gizmo = (v == 0),
+		},
+		{
+			"label": "PROP DBG",
+			"options": toggle_options,
+			"getter": func() -> int:
+				if _player == null:
+					_player = get_tree().get_first_node_in_group("player_drone") as DroneController
+				return 0 if _player != null and _player.show_prop_debug else 1,
+			"setter": func(v: int) -> void:
+				if _player == null:
+					_player = get_tree().get_first_node_in_group("player_drone") as DroneController
+				if _player != null:
+					_player.show_prop_debug = (v == 0),
 		},
 	]
 	return out

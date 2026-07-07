@@ -130,6 +130,51 @@ inertia tumble the airframe naturally (no magic forces). Only `reset_drone`
 (Triangle) and `toggle_fpv` (R1 — the camera belongs to the pilot, not the dead
 drone) are handled; `toggle_flight_mode` is ignored. `reset()` restores FLYING.
 
+**Prop obstruction (P6.6)** — a rotor whose prop disc is clipped by terrain or
+another drone body loses thrust, so the remaining rotors' asymmetric forces
+tumble the airframe naturally (still rotor-only, no magic torque). State
+machine per rotor, `_prop_state` (order `[FL, FR, BL, BR]`, matching
+`_rotor_positions`): `0` free, `1` obstructed (transient — recomputed every
+tick from the query), `2` broken (latched until `reset()`). Only queried
+while armed AND flying (`_compute_and_apply_forces` skips the whole query when
+`control.collective < 0.001` — a parked/landed pad drone does zero shape
+casts, not just zero-force rotors). Each armed tick, a shared `CylinderShape3D`
+(radius `prop_radius`, default 0.12 m; thickness `prop_disc_height`, default
+0.04 m — Godot's cylinder axis is +Y, matching the prop disc's body-up
+normal) is cast via `PhysicsShapeQueryParameters3D.intersect_shape` at each
+rotor's world position (`global_transform * _rotor_positions[i]`), oriented
+with the drone's own basis (`Transform3D(global_transform.basis, world_pos)`)
+so the thin disc tilts with the airframe instead of always querying straight
+down — a banked drone catches the ground/an obstacle at the disc's rim, not
+through an isotropic sphere's vertical over-reach. Excludes the drone's own
+RID. A rotor with any hit → state 1 that tick (thrust zeroed in the force
+loop, `last_mix` zeroed to match so telemetry reflects reality); no hit →
+state 0. Yaw torque is scaled by the fraction of still-live rotors
+(`live_rotors / 4.0`), so a dead prop also degrades yaw authority, not just
+lift. **Permanent break** — a rotor transitioning 0→1 while its commanded
+throttle exceeds 0.5 AND the previous-tick impact speed
+(`_prev_velocity.length()`) exceeds `prop_break_speed` (default 3.0 m/s)
+latches state 2: the blur-disc visual swaps back to the idle Blender prop
+(same mechanism as `_set_armed()`, but per-rotor and permanent) and, if a HUD
+(group `"debug_hud"`) is reachable, logs `"PROP <FL/FR/BL/BR> OUT"` to both
+console and the on-screen event log. `reset()` clears the whole array to 0
+and restores all rotor visuals. ponytail: the query is 4 shape casts per
+armed drone per physics tick — O(4·N_armed) for the whole swarm; intentional
+for now given how cheap sphere casts are, with two upgrade paths if
+profiling ever flags it: gate on a has-contacts flag set from
+`_integrate_forces`, or a coarse broad-phase pass before the per-rotor query.
+Known limitation: this is a single thin-cylinder approximation of the whole
+disc's sweep (not a per-blade check), centered at the rotor hub.
+
+**Debug visualization** — `show_prop_debug` (default off, inspector or the
+HUD submenu's "PROP DBG" toggle via `PadMenu`, group `"player_drone"`) draws
+the exact query shape at each rotor as a child `MeshInstance3D` with a
+`CylinderMesh` sized identically to `_prop_query_shape` (so what's drawn IS
+the hitbox), tinted by `_prop_state[i]` each tick (free = cyan, obstructed =
+amber, broken = red). Meshes are lazily built on first enable and freed the
+moment the flag goes false — zero cost while off, since `_update_prop_debug`
+is only ever called from behind `if show_prop_debug`.
+
 ### `scripts/drone/flight_mode_base.gd` — Abstract Base
 
 `FlightModeBase extends RefCounted`. Virtual method:
@@ -330,7 +375,7 @@ during a crash bails from the dead feed to watch the wreck. Reset (polled via
 
 ### `scripts/test/flight_mode_test.gd` — Headless Test Harness
 
-15 tests using `Input.action_press/release` + `await get_tree().physics_frame`:
+17 tests using `Input.action_press/release` + `await get_tree().physics_frame`:
 
 | Test | Input | Verification |
 |---|---|---|
@@ -349,6 +394,8 @@ during a crash bails from the dead feed to watch the wreck. Reset (polled via
 | Crash on hard impact | Drop at -12 m/s onto ground | is_crashed() true |
 | Gentle landing | Acro throttle-cut settle at ~1.7 m/s | No crash |
 | Reset clears crash | Crash, reset(), 5 ticks | FLYING, near spawn |
+| Obstructed prop tumbles (P6.6) | StaticBody3D box on the FL rotor's world position, 60 ticks at 50% throttle | Angular speed > 0.3 rad/s AND > 3x a clean control run at the same throttle |
+| Broken prop survives until reset (P6.6) | Force `_prop_state[1] = 2`, 30 ticks, then `reset()` | Stays state 2 across ticks; reset() clears the whole array to 0 |
 
 Run: `godot --headless --path . scenes/test/flight_mode_test_scene.tscn`
 (or `./run_tests.sh`)
@@ -724,6 +771,19 @@ stale. `_on_drone_crashed → DOWN` (a wreck; CALL BACKUP replaces it).
   saves nothing and hands the sticks back in **stabilized** at
   `release_altitude` AGL (a ground-level handoff dumped the player into the
   converging swarm); Triangle reset also releases it.
+- **Stranded self-destruct (P6.6)** — a follower with all 4 rotors
+  non-functional (`DroneController.all_props_disabled()` — every
+  `_prop_state[i] != 0`, obstructed or broken; e.g. tumbled upside-down on a
+  field after a prop-obstruction tumble) for longer than `stranded_timeout`
+  (default 10 s) is immovable dead weight. The timer only runs during active
+  flight (FORMATION/DISPATCHED) — it's skipped entirely for
+  LANDING/LANDED/TAKEOFF/DOWN, so a parked pad drone never counts toward it,
+  and it resets to 0 the instant any rotor recovers. On timeout: `lose_signal()`
+  (dead radio, same rotor-only crash path), behavior → `DOWN`, then
+  `SwarmManager.remove_follower(pilot)` drops it from `pilots` and frees both
+  drone and pilot — no litter wreck sitting on the field, and CALL BACKUP can
+  replace the slot. Other pilots' `slot_index` are left as-is (a gap is fine).
+  Player auto-land is out of scope (follower-only).
 
 ### `scripts/ui/pad_menu.gd` — DPad command menu
 
@@ -753,18 +813,20 @@ so web builds without a console can see swarm/dispatch activity.
 
 ### `scripts/test/swarm_test.gd` — Swarm Headless Test Harness (P6)
 
-15 tests: slot-table math per formation, control-law signs, integral drift-trim,
+17 tests: slot-table math per formation, control-law signs, integral drift-trim,
 pilot dropout freeze, velocity feed-forward, pad-menu state machine (incl. HUD
 submenu descend/back), dispatch selection + per-type aim + powered-dive
-arming, backup cooldown, player auto-land handoff, pad-slot spacing, and
-five bounded flight tests (a follower ground-starts then holds/reconverges;
+arming, backup cooldown, player auto-land handoff, pad-slot spacing, six
+bounded flight tests (a follower ground-starts then holds/reconverges;
 auto-land settles + takes off; kamikaze impact clears a CRASH target; kamikaze
 glideslope arrives already descending on a slope — not just `vel.y < 0` —
 before crossing inside `dive_radius`, sampled from a high dispatch altitude so
 the slope has room to bite; a follower dispatched from LOW AGL close to a
 CRASH target climbs to `strike_altitude` above it — polled via `_plunging`
 staying false until the drop is gained — before ever committing to the dive,
-and still clears the target).
+and still clears the target), and a stranded-follower self-destruct test
+(P6.6 — all 4 rotors force-disabled past a shortened `stranded_timeout` ends
+with the pilot removed from `m.pilots`).
 
 Run: `godot --headless --path . scenes/test/swarm_test_scene.tscn`
 
@@ -918,3 +980,9 @@ triggers, so the actions never fired on a real controller.
 | Sink cap min_sink_rate | flight_mode_formation.gd | 2.0 m/s, range ~1.5–4 |
 | Sink cap agl_sink_gain | flight_mode_formation.gd | 0.5, range ~0.2–1.0 |
 | Sink cap sink_arrest_gain | flight_mode_formation.gd | 0.1, range ~0.05–0.3 |
+| Prop obstruction prop_radius | drone_controller.gd | 0.12 m, range ~0.09–0.14 |
+| Prop obstruction prop_disc_height | drone_controller.gd | 0.04 m, range ~0.02–0.08 |
+| Prop obstruction prop_break_speed | drone_controller.gd | 3.0 m/s, range ~2–5 |
+| Prop obstruction show_prop_debug | drone_controller.gd | false (inspector + HUD "PROP DBG" toggle) |
+| Stranded self-destruct stranded_timeout | follower_pilot.gd | 10.0 s |
+| Swarm altitude_offset (P6.6 clearance bump) | swarm_manager.gd | 1.5 m (was 0.0) |

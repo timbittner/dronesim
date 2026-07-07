@@ -95,6 +95,10 @@ func _run_all_tests() -> void:
 	await _run_test("test_gentle_landing_no_crash")
 	await _run_test("test_reset_clears_crash")
 
+	# Prop obstruction (P6.6 step 3)
+	await _run_test("test_obstructed_prop_tumbles")
+	await _run_test("test_broken_prop_survives_until_reset")
+
 	var total := _passed + _failed
 	print("[TEST] ========================================")
 	print("[TEST] Results: ", _passed, " passed, ", _failed, " failed out of ", total)
@@ -499,4 +503,68 @@ func test_reset_clears_crash() -> bool:
 	# near it, so a couple of ticks after reset the drone should be close.
 	var passed: bool = not crashed and pos.distance_to(Vector3(0.0, 1.0, 0.0)) < 1.0
 	print("[TEST] ", "PASS" if passed else "FAIL", " — expected FLYING near spawn after reset")
+	return passed
+
+
+## Obstructing one rotor's prop disc must zero that rotor's thrust, so the
+## remaining three tip the airframe toward the obstructed corner — rotor-only,
+## no magic torque. A clean control run at the same throttle stays ~level.
+func test_obstructed_prop_tumbles() -> bool:
+	print("[TEST] --- test_obstructed_prop_tumbles ---")
+
+	# Clean control run first (no obstruction) — stays roughly level.
+	_reset_drone()
+	Input.action_press("throttle_up", 0.5)
+	await _run_ticks(60)
+	Input.action_release("throttle_up")
+	var control_ang_speed: float = _drone.angular_velocity.length()
+
+	# Obstructed run: a StaticBody3D box parked exactly on the FL rotor's
+	# world position, high above the test-scene ground so nothing else
+	# interferes.
+	_reset_drone()
+	var fl_world: Vector3 = _drone.global_transform * _drone._rotor_positions[0]
+	var box := StaticBody3D.new()
+	var shape := CollisionShape3D.new()
+	var box_shape := BoxShape3D.new()
+	box_shape.size = Vector3(0.3, 0.3, 0.3)
+	shape.shape = box_shape
+	box.add_child(shape)
+	get_tree().root.add_child(box)
+	box.global_position = fl_world
+
+	Input.action_press("throttle_up", 0.5)
+	await _run_ticks(60)
+	Input.action_release("throttle_up")
+	var obstructed_ang_speed: float = _drone.angular_velocity.length()
+
+	box.queue_free()
+
+	print("[TEST] control_ang_speed=%.3f obstructed_ang_speed=%.3f"
+			% [control_ang_speed, obstructed_ang_speed])
+	var passed: bool = obstructed_ang_speed > 0.3 and obstructed_ang_speed > control_ang_speed * 3.0
+	print("[TEST] ", "PASS" if passed else "FAIL",
+			" — obstructed FL prop should tumble the drone while the clean run stays level")
+	return passed
+
+
+## A rotor that latches broken (state 2) must stay broken across ticks —
+## no transient recovery — until reset() clears the whole array to 0.
+func test_broken_prop_survives_until_reset() -> bool:
+	print("[TEST] --- test_broken_prop_survives_until_reset ---")
+	_reset_drone()
+
+	_drone._prop_state[1] = 2  # force FR broken directly (permanent-break path
+								# is exercised indirectly by the obstruction test)
+	await _run_ticks(30)
+	var stayed_broken: bool = _drone._prop_state[1] == 2
+
+	_drone.reset()
+	await _run_ticks(2)
+	var cleared: bool = _drone._prop_state == [0, 0, 0, 0]
+
+	print("[TEST] stayed_broken=%s cleared_after_reset=%s" % [stayed_broken, cleared])
+	var passed: bool = stayed_broken and cleared
+	print("[TEST] ", "PASS" if passed else "FAIL",
+			" — broken prop survives ticks, reset() clears it")
 	return passed

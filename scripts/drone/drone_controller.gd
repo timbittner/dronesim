@@ -73,6 +73,42 @@ var _zero_quality_time: float = 0.0
 ## the hit to count as "direct". Grazing contacts beyond this angle only bounce.
 @export var crash_max_impact_angle_deg: float = 60.0
 
+# --- Prop obstruction ---
+## Prop-disc query radius, m — the real prop's blade-tip sweep (see
+## propeller.glb: ~0.09 m blade length, so ~0.09 m from hub to tip; bumped
+## a bit further out here for margin). A rotor whose disc overlaps terrain
+## or another drone body produces zero thrust that tick. Range roughly 0.09
+## to 0.14.
+@export var prop_radius: float = 0.12
+## Thickness of the prop-disc query shape, m — thin, since a prop is a flat
+## sweep, not a ball. Range roughly 0.02 to 0.08.
+@export var prop_disc_height: float = 0.04
+## Impact speed (m/s, previous-tick velocity) above which a rotor going
+## 0→obstructed under commanded throttle latches permanently broken (state 2)
+## instead of just transiently blocked. Range roughly 2 to 5.
+@export var prop_break_speed: float = 3.0
+## Debug-only: draw each rotor's exact prop-disc query shape in the world,
+## tinted by state (free/obstructed/broken). Off by default — zero cost when
+## false. Toggle in-game via the HUD submenu (PadMenu "PROP DBG").
+@export var show_prop_debug: bool = false
+
+## Per-rotor obstruction state, order matches _rotor_positions (FL, FR, BL, BR).
+## 0 = free, 1 = obstructed (transient, recomputed every tick), 2 = broken
+## (latched until reset()).
+var _prop_state: Array[int] = [0, 0, 0, 0]
+var _prop_query_shape: CylinderShape3D = null
+var _prop_query_params: PhysicsShapeQueryParameters3D = null
+
+# --- Prop debug visualization (lazily built, only when show_prop_debug) ---
+var _prop_debug_meshes: Array[MeshInstance3D] = []
+var _prop_debug_built_radius: float = -1.0
+var _prop_debug_built_height: float = -1.0
+const _PROP_DEBUG_COLORS: Array[Color] = [
+	Color(0.3, 1.0, 1.0, 0.35),  # 0 free — cyan
+	Color(1.0, 0.65, 0.0, 0.5),  # 1 obstructed — amber
+	Color(1.0, 0.15, 0.15, 0.6),  # 2 broken — red
+]
+
 # Per-rotor hover throttle: (mass * gravity) / (4 * max_thrust)
 var hover_throttle: float = 0.0
 
@@ -161,6 +197,10 @@ var _rotor_idle_meshes: Array[Mesh] = []        # per-rotor stopped prop
 var _rotor_spin_materials: Array[Material] = []  # per-rotor tinted blur disc
 var _rotor_spin_mesh: Mesh                        # shared blur-disc geometry
 var _armed: bool = false
+## Set each tick from _integrate_forces' contact count — the body hitbox is
+## already monitored for crash detection, so we reuse it to gate the per-prop
+## shape casts: no body contact this tick ⇒ nothing can be clipping a prop.
+var _body_in_contact: bool = false
 
 # Rotor positions in local body frame. Order is [FL, FR, BL, BR] and MUST match
 # the mixer output order. Forward (nose) = −Z, right = +X. See AGENTS.md
@@ -201,6 +241,13 @@ func _ready() -> void:
 
 	_brake = BrakeAssist.new()
 	_brake.max_thrust = max_thrust
+
+	_prop_query_shape = CylinderShape3D.new()
+	_prop_query_shape.radius = prop_radius
+	_prop_query_shape.height = prop_disc_height
+	_prop_query_params = PhysicsShapeQueryParameters3D.new()
+	_prop_query_params.shape = _prop_query_shape
+	_prop_query_params.exclude = [get_rid()]
 
 	_setup_visuals()
 
@@ -359,7 +406,9 @@ func _physics_process(delta: float) -> void:
 func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 	# Crash detection. Contacts require contact_monitor = true and
 	# max_contacts_reported > 0 on the RigidBody3D (set in drone.tscn).
-	if _state == State.CRASHED or state.get_contact_count() == 0:
+	# Record contact presence first — the prop-obstruction gate reuses it.
+	_body_in_contact = state.get_contact_count() > 0
+	if _state == State.CRASHED or not _body_in_contact:
 		return
 	# Zero-velocity guard: resting contact (e.g. sitting on the spawn pad)
 	# has no meaningful impact velocity — normalized() would be undefined.
@@ -472,18 +521,158 @@ func _compute_and_apply_forces(delta: float) -> void:
 
 	var mix := _mix_rotors(control.collective, control.pitch_diff, control.roll_diff)
 	thrust_percent = (mix.fl + mix.fr + mix.bl + mix.br) * 0.25 * 100.0
-	_set_armed(control.collective >= 0.001)
+	var armed: bool = control.collective >= 0.001
+	_set_armed(armed)
+
+	var throttles: Array[float] = [mix.fl, mix.fr, mix.bl, mix.br]
+	# Prop obstruction runs only when armed AND the body is actually touching
+	# something (flag from _integrate_forces): a swarm cruising mid-air does
+	# zero shape casts — the cost only lands on the tick something collides.
+	# No body contact ⇒ nothing clips a prop, so clear transient obstruction
+	# (state 1) but keep permanent breaks (state 2). Disarmed clears everything.
+	if armed and _body_in_contact:
+		_update_prop_obstruction(throttles)
+	elif armed:
+		for i in range(4):
+			if _prop_state[i] == 1:
+				_prop_state[i] = 0
+	else:
+		_prop_state = [0, 0, 0, 0]
+
+	# Also enter when the flag is off but meshes still exist, so toggling off
+	# actually frees them (otherwise the free path never runs). Steady-state
+	# cost when off is zero: once freed, both conditions are false.
+	if show_prop_debug or not _prop_debug_meshes.is_empty():
+		_update_prop_debug()
 
 	var up: Vector3 = global_transform.basis.y
-	var throttles: Array[float] = [mix.fl, mix.fr, mix.bl, mix.br]
-	last_mix = throttles
+	var live_rotors: int = 0
 	for i in range(4):
+		if _prop_state[i] != 0:
+			throttles[i] = 0.0
+			continue
+		live_rotors += 1
 		var force: Vector3 = up * throttles[i] * max_thrust
 		var global_pos: Vector3 = global_transform.basis * _rotor_positions[i]
 		apply_force(force, global_pos)
+	last_mix = throttles
 
-	if control.yaw_torque != 0.0:
-		apply_torque(global_transform.basis * Vector3(0.0, -control.yaw_torque, 0.0))
+	if control.yaw_torque != 0.0 and live_rotors > 0:
+		# A dead prop also degrades yaw authority — scale by the fraction of
+		# rotors still live (4/4 = full authority, 0/4 = none).
+		var yaw_scale: float = live_rotors / 4.0
+		apply_torque(global_transform.basis * Vector3(0.0, -control.yaw_torque * yaw_scale, 0.0))
+
+
+## Per-rotor prop-disc shape query — a rotor overlapping terrain or another
+## drone body produces zero thrust that tick (rotor-only, no magic: the
+## remaining rotors' asymmetric thrust tumbles the airframe naturally).
+## ponytail: 4 shape casts, but only on ticks where the body hitbox reports a
+## contact (see the _body_in_contact gate at the call site) — a mid-air swarm
+## does zero casts, so cost scales with collisions, not drone count. Trade-off:
+## a prop tip clipping a thin object the body misses won't register that tick,
+## but it self-corrects as the drone sinks into fuller contact.
+func _update_prop_obstruction(throttles: Array[float]) -> void:
+	var space := get_world_3d().direct_space_state
+	for i in range(4):
+		if _prop_state[i] == 2:
+			continue  # already broken — no need to re-query
+		var world_pos: Vector3 = global_transform * _rotor_positions[i]
+		# Cylinder axis is +Y (Godot convention); orienting with the airframe
+		# basis (not identity) tilts the disc's flat faces with the prop plane
+		# as the drone banks, instead of always querying straight down.
+		_prop_query_params.transform = Transform3D(global_transform.basis, world_pos)
+		var hits: Array = space.intersect_shape(_prop_query_params, 1)
+		var was_free: bool = _prop_state[i] == 0
+		if hits.is_empty():
+			_prop_state[i] = 0
+			continue
+		_prop_state[i] = 1
+		if was_free and throttles[i] > 0.5 and _prev_velocity.length() > prop_break_speed:
+			_prop_state[i] = 2
+			_break_rotor_visual(i)
+			_log_prop_out(i)
+
+
+## Swap a broken rotor's blur disc back to the idle Blender prop — same
+## mechanism as _set_armed(), but per-rotor and permanent until reset().
+func _break_rotor_visual(i: int) -> void:
+	if i >= _rotor_nodes.size() or _rotor_nodes[i] == null:
+		return
+	_rotor_nodes[i].mesh = _rotor_idle_meshes[i]
+	_rotor_nodes[i].material_override = null
+
+
+## Builds/tears down and updates the 4 debug prop-disc meshes. Zero cost when
+## show_prop_debug is false (called only from behind that flag; also frees any
+## already-built meshes the moment it flips off, via the guard below).
+func _update_prop_debug() -> void:
+	if not show_prop_debug:
+		_free_prop_debug()
+		return
+	if _prop_debug_meshes.is_empty():
+		_build_prop_debug()
+	elif _prop_debug_built_radius != prop_radius or _prop_debug_built_height != prop_disc_height:
+		_free_prop_debug()
+		_build_prop_debug()
+	for i in range(4):
+		var mat := _prop_debug_meshes[i].material_override as StandardMaterial3D
+		var color: Color = _PROP_DEBUG_COLORS[_prop_state[i]]
+		mat.albedo_color = color
+		mat.emission = color
+
+
+## Lazily create the 4 debug MeshInstance3D children — CylinderMesh sized
+## exactly like _prop_query_shape, so what's drawn IS the query hitbox.
+func _build_prop_debug() -> void:
+	_prop_debug_built_radius = prop_radius
+	_prop_debug_built_height = prop_disc_height
+	for i in range(4):
+		var mesh := CylinderMesh.new()
+		mesh.top_radius = prop_radius
+		mesh.bottom_radius = prop_radius
+		mesh.height = prop_disc_height
+		var mi := MeshInstance3D.new()
+		mi.mesh = mesh
+		var mat := StandardMaterial3D.new()
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mat.emission_enabled = true
+		mat.emission_energy_multiplier = 0.5
+		mi.material_override = mat
+		mi.position = _rotor_positions[i]
+		add_child(mi)
+		_prop_debug_meshes.append(mi)
+
+
+func _free_prop_debug() -> void:
+	for mi in _prop_debug_meshes:
+		mi.queue_free()
+	_prop_debug_meshes.clear()
+	_prop_debug_built_radius = -1.0
+	_prop_debug_built_height = -1.0
+
+
+const _ROTOR_NAMES: Array[String] = ["FL", "FR", "BL", "BR"]
+
+## Console + on-screen event log if a HUD is reachable (group "debug_hud",
+## same lazily-resolved lookup pattern as SwarmManager._log()); console-only
+## otherwise.
+func _log_prop_out(i: int) -> void:
+	var msg := "[%s] PROP %s OUT" % [name, _ROTOR_NAMES[i]]
+	print(msg)
+	var hud := get_tree().get_first_node_in_group("debug_hud")
+	if hud != null and hud.has_method("log_line"):
+		hud.log_line(msg)
+
+
+## True iff every rotor is non-functional (obstructed or broken) — read by
+## FollowerPilot to detect a stranded follower (e.g. tumbled upside-down).
+func all_props_disabled() -> bool:
+	for state in _prop_state:
+		if state == 0:
+			return false
+	return true
 
 
 ## Minimum rotor throttle fraction. Prevents any rotor from fully cutting out
@@ -651,6 +840,11 @@ func reset() -> void:
 	signal_quality = 1.0
 	_zero_quality_time = 0.0
 	_dropout_timer = 0.0
+	_prop_state = [0, 0, 0, 0]
+	for i in _rotor_nodes.size():
+		_rotor_nodes[i].mesh = _rotor_idle_meshes[i]
+		_rotor_nodes[i].material_override = null
+	_armed = false  # forces _set_armed's next call to re-apply spin visuals
 	drone_reset.emit()
 	print("[Drone] Reset to spawn")
 

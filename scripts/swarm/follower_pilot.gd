@@ -86,6 +86,13 @@ var _strike_time: float = 0.0
 ## a dive that skims past instead of impacting).
 const STRIKE_TIMEOUT: float = 3.0
 
+## Seconds all 4 rotors must stay non-functional (obstructed or broken) before
+## a stranded follower self-destructs — otherwise it's immovable dead weight
+## littering the field (e.g. tumbled upside-down). Only ticks during active
+## flight; a parked/landed drone never counts toward this.
+@export var stranded_timeout: float = 10.0
+var _stranded_time: float = 0.0
+
 
 ## Wire the pilot to its drone: installs a FlightModeFormation and listens for
 ## crashes. Called by the swarm manager after spawning both.
@@ -269,6 +276,20 @@ func _physics_process(delta: float) -> void:
 	_mode.current_position = drone.global_position
 	_mode.current_velocity = drone.linear_velocity
 	_mode.ground_y = _ground_below()  # AGL reference for the sink-rate cap
+
+	# Stranded self-destruct: only during active flight (FORMATION/DISPATCHED,
+	# reached below) — LANDED/LANDING/TAKEOFF/DOWN all return before this point,
+	# so a parked drone never counts toward the timeout.
+	if drone.all_props_disabled():
+		_stranded_time += delta
+		if _stranded_time >= stranded_timeout:
+			_log("[Swarm] %s stranded — self-destructing" % drone.name)
+			drone.lose_signal()
+			set_behavior(Behavior.DOWN)
+			manager.remove_follower(self)
+			return
+	else:
+		_stranded_time = 0.0
 
 	if behavior == Behavior.DISPATCHED:
 		_fly_dispatch(delta)
