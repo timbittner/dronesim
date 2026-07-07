@@ -6,7 +6,7 @@ A 3D drone flight simulator built in Godot 4.7 / GDScript, iterating toward a
 drone swarm simulator with realistic flight physics, autonomous routing,
 weather, and threat simulation.
 
-**Current phase:** P6.5 complete. Shipped so far:
+**Current phase:** P6.6 complete. Shipped so far:
 - **P2** — per-rotor thrust vectoring, assisted flight modes (altitude
   hold + brake), crash / signal loss, terrain-aware wind.
 - **P3** — project health: GitHub upstream + CI
@@ -28,6 +28,13 @@ weather, and threat simulation.
   launches everyone), a powered-dive kamikaze (thrust at the target, not
   free-fall), a HUD dispatch marker, an on-screen event log, and a HUD
   submenu (log/telemetry/wind/gizmo/axes toggles).
+- **P6.6** — polishing: stabilized mode blends its rate and auto-level laws
+  across the deadzone (no more release-snap), a curved glideslope kamikaze
+  run-in with a climb-to-strike gate and an AGL-aware descent cap, per-prop
+  obstruction (a clipped prop cuts thrust so the airframe tumbles; hard hits
+  break a rotor for good; all-rotors-dead followers self-destruct), a shared
+  `HUDTheme` palette, an instrument-style FPV attitude indicator, and the
+  per-system doc split into `docs/systems/`.
 
 **`PROJECT_SUMMARY.md` is the deep-dive reference** — architecture and a
 per-system index live there, with the detailed per-script internals and the

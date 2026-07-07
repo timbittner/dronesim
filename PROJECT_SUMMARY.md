@@ -4,7 +4,8 @@ A 3D drone flight simulator in **Godot 4.7 / GDScript** with **Jolt Physics**.
 Single drone, flyable with a PS5 DualSense controller. Real-world terrain,
 chase/FPV cameras, debug HUD.
 
-Current phase: **Per-rotor thrust vectoring complete**, plus **Phase B assisted
+Current phase: **P6.6 complete** (per-phase breakdown in AGENTS.md). The stack
+so far: per-rotor thrust vectoring, plus **Phase B assisted
 flight modes** (altitude hold + brake), **Phase C crash / signal loss**, and
 **Phase D wind system** — both acro and stabilized modes use individual rotor
 forces applied at each arm position; hard impacts kill the "signal" (rotors
@@ -34,7 +35,16 @@ from a target pose, a DPad `PadMenu` (formation cycle, auto-land/take-off, call
 backup), and FPV crosshair dispatch (send the nearest follower to observe or
 kamikaze a target). Followers are full drones, so jamming degrades them like the
 player.
-15 + 6 + 3 + 8 + 4 + 12 headless tests pass.
+**P6.5 QoL** starts the swarm landed on the pad (one TAKE OFF launches
+everyone), makes the kamikaze a powered dive, and adds a HUD dispatch marker,
+an on-screen event log, and a HUD toggle submenu. **P6.6 polishing** blends
+stabilized mode's rate and auto-level laws (no release-snap), gives the kamikaze
+a curved glideslope run-in with a climb-to-strike gate and an AGL descent cap,
+adds per-prop obstruction (a clipped prop cuts thrust so the airframe tumbles;
+hard hits break a rotor for good; stranded followers self-destruct), a shared
+`HUDTheme` palette, an instrument-style FPV attitude indicator, and the
+per-system doc split into `docs/systems/`.
+18 + 6 + 3 + 8 + 4 + 17 headless tests pass.
 
 ---
 
