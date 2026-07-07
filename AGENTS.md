@@ -6,7 +6,7 @@ A 3D drone flight simulator built in Godot 4.7 / GDScript, iterating toward a
 drone swarm simulator with realistic flight physics, autonomous routing,
 weather, and threat simulation.
 
-**Current phase:** P6.5 complete. Shipped so far:
+**Current phase:** P6.6 complete. Shipped so far:
 - **P2** — per-rotor thrust vectoring, assisted flight modes (altitude
   hold + brake), crash / signal loss, terrain-aware wind.
 - **P3** — project health: GitHub upstream + CI
@@ -28,13 +28,23 @@ weather, and threat simulation.
   launches everyone), a powered-dive kamikaze (thrust at the target, not
   free-fall), a HUD dispatch marker, an on-screen event log, and a HUD
   submenu (log/telemetry/wind/gizmo/axes toggles).
+- **P6.6** — polishing: stabilized mode blends its rate and auto-level laws
+  across the deadzone (no more release-snap), a curved glideslope kamikaze
+  run-in with a climb-to-strike gate and an AGL-aware descent cap, per-prop
+  obstruction (a clipped prop cuts thrust so the airframe tumbles; hard hits
+  break a rotor for good; all-rotors-dead followers self-destruct), a shared
+  `HUDTheme` palette, an instrument-style FPV attitude indicator, and the
+  per-system doc split into `docs/systems/`.
 
-**`PROJECT_SUMMARY.md` is the deep-dive reference** — architecture, per-system
-internals, and all tuning parameters live there. This file stays a lean guide:
-conventions, file-map, canonical coordinate system, controller layout, and
-known issues, with pointers into the summary for detail. **Doc-comment
-gotcha:** the docs CI job fails on a bare `[...]` in a GDScript `##` comment
-(parses as BBCode) — keep public members documented and escape brackets.
+**`PROJECT_SUMMARY.md` is the deep-dive reference** — architecture and a
+per-system index live there, with the detailed per-script internals and the
+exhaustive tuning-parameter table split out into `docs/systems/*.md` (flight,
+environment, terrain, gamification, swarm, tuning). This file stays a lean
+guide: conventions, file-map, canonical coordinate system, controller layout,
+and known issues, with pointers into the summary (and from there into
+`docs/systems/`) for detail. **Doc-comment gotcha:** the docs CI job fails on
+a bare `[...]` in a GDScript `##` comment (parses as BBCode) — keep public
+members documented and escape brackets.
 
 ## Tech Stack
 
@@ -98,12 +108,12 @@ scripts/
     debug_hud.gd                 Telemetry + wind arrow + compass + banners + post shader + dispatch reticle/marker + event log (P6/P6.5)
     pad_menu.gd                  DPad swarm command menu + HUD toggle submenu (P6/P6.5)
   test/
-    flight_mode_test.gd          15 headless tests
+    flight_mode_test.gd          18 headless tests
     wind_field_test.gd           6 headless wind-field tests
     flight_recorder_test.gd      3 headless telemetry tests
     osm_terrain_test.gd          8 headless map/terrain tests (P4)
     mission_test.gd              4 headless mission/signal tests (P5)
-    swarm_test.gd                13 headless swarm tests (P6/P6.5)
+    swarm_test.gd                17 headless swarm tests (P6/P6.6)
     mock_hill_terrain.gd         Deterministic terrain stand-in for wind tests
 assets/
   shaders/ps2_post.gdshader      PS2 look + analog signal static, both views (P5)
@@ -122,6 +132,7 @@ the GLB meshes at runtime, tints props (front cyan / back pink), and swaps in
 code-built blur discs when armed. Nose faces −Z. Full detail:
 `PROJECT_SUMMARY.md → Drone Geometry`.
 
+
 ### Flight Pipeline
 
 Three layers: `Mode.compute()` → `FlightControl` → `_mix_rotors()` (anti-clip
@@ -129,26 +140,26 @@ scaling + MIN_ROTOR) → `RotorMix` → `apply_force()` at 4 rotor positions +
 `apply_torque()` for yaw → `_apply_angular_damping()`. Full breakdown:
 `PROJECT_SUMMARY.md → Three-Layer Flight Pipeline`.
 
-### Per-system detail — see PROJECT_SUMMARY.md
+### Per-system detail — see docs/systems/
 
-The deep-dive lives in `PROJECT_SUMMARY.md`. Load-bearing invariants that are
-easy to break, kept here as terse warnings:
+The deep-dives live in `docs/systems/*.md` (indexed from `PROJECT_SUMMARY.md`).
+Load-bearing invariants that are easy to break, kept here as terse warnings:
 
 - **Crash / signal loss (P2):** two states `FLYING` / `CRASHED`, detected in
   `_integrate_forces` (needs `contact_monitor` + `continuous_cd` in
   `drone.tscn` — without CCD the thin body tunnels above ~10 m/s). On crash,
   rotor forces stop and physics tumbles the airframe — **no magic forces**.
   Environment-side reactions (dust burst) live in `crash_effects.gd`, not the
-  controller. Detail: `PROJECT_SUMMARY.md → drone_controller.gd`,
-  `crash_effects.gd`.
+  controller. Detail: `docs/systems/flight.md → drone_controller.gd`,
+  `docs/systems/environment.md → crash_effects.gd`.
 - **Wind (P2):** relative-airspeed drag, not a magic push. **Do not re-add
   body `linear_damp`** to tune drift/damping — `air_drag_coefficient = 1.0`
   at `mass = 2.0` reproduces the old `linear_damp = 0.5` exactly in still air;
   re-adding it double-damps and silently breaks that parity. Tune
   `air_drag_coefficient` instead. `WindField` is an environment-side node
   (group `"wind_field"`, lazily resolved); **no `WindField` in a scene = zero
-  wind everywhere**. Detail: `PROJECT_SUMMARY.md → wind_field.gd`,
-  `wind_particles.gd`, and the Wind Drag note.
+  wind everywhere**. Detail: `docs/systems/environment.md → wind_field.gd`,
+  `wind_particles.gd`, and `docs/systems/flight.md`'s Wind Drag note.
 - **Real-world terrain (P4):** `OsmTerrain` loads baked assets from
   `assets/maps/sebexen/`; `get_height(x, z)` keeps the same duck-typed
   contract as `TerrainGenerator` so `WindField` needs no changes.
@@ -156,14 +167,13 @@ easy to break, kept here as terse warnings:
   `.bin`/`.json`/`.png` are not Godot resources and would otherwise be
   dropped from the web export. The procedural `TerrainGenerator` is retired
   from `main.tscn` but kept for reference/wind tests. Detail:
-  `PROJECT_SUMMARY.md → Real-World Terrain (P4)`.
+  `docs/systems/terrain.md`.
 - **Gamification (P5):** one `SignalField` scalar (0..1) feeds the static
   shader, control packet loss, and (sustained-zero) `lose_signal()` — the
   crash transition minus the impact check, still **rotor-only, no magic
   force**. `AirspaceControl` radar ceiling reuses the same `lose_signal()`.
   All P5 nodes follow the WindField pattern (group-registered, lazily
-  resolved, absent node = neutral). Detail: `PROJECT_SUMMARY.md →
-  Gamification (P5)`.
+  resolved, absent node = neutral). Detail: `docs/systems/gamification.md`.
 - **Swarm (P6):** followers are full `DroneController`s (rotor-only, no magic —
   future flight-model work applies to the whole swarm). The **only** radio-side
   data is `SwarmManager.get_leader_state()` (leader pos/vel/heading); a jammed
@@ -177,7 +187,7 @@ easy to break, kept here as terse warnings:
   rotor-only `lose_signal()` as a botched-dive safety net. The swarm + player
   start **landed** on the pad (P6.5); menu TAKE OFF launches everyone, and
   Triangle re-parks only the player (followers are untouched by reset).
-  Detail: `PROJECT_SUMMARY.md → Swarm (P6)`.
+  Detail: `docs/systems/swarm.md`.
 
 ### Extension Points
 
@@ -313,18 +323,6 @@ correct-looking `project.godot` entry, check this first.
   compensated. The headless test for this
   (`test_stabilized_roll_does_not_induce_yaw_spin`) only asserts the coupling
   stays bounded (<45° heading delta), not that it's absent.
-- **Stabilized mode "jump" when releasing stick near level**
-  (`flight_mode_stabilized.gd`): rate-mode and auto-level are two different
-  control laws, hard-switched at `input_deadzone` with no blending — releasing
-  the stick while still tilted can snap into level. Likely fix: blend the two
-  laws across the deadzone. Full rationale:
-  `PROJECT_SUMMARY.md → flight_mode_stabilized.gd`.
-- **Stabilized mode feels "sticky" near level under active stick input**
-  (`flight_mode_stabilized.gd`): the auto-level gyro low-pass filter is reused
-  for rate-mode's feedback, adding lag that's proportionally worse for the
-  small commanded rates near level. Likely fix: separate filtered signals for
-  the two paths. Full rationale:
-  `PROJECT_SUMMARY.md → flight_mode_stabilized.gd`.
 
 ## License
 

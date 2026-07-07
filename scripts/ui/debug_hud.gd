@@ -80,7 +80,7 @@ var _swarm_searched: bool = false
 # DISPATCHED follower, apex up/down by relative altitude to the player,
 # clamped to the screen edge when off-view, with its follower number.
 var _marker_canvas: Control
-const MARKER_COLOR := Color(0.3, 0.9, 1.0)
+const MARKER_COLOR := HUDTheme.MARKER
 
 # On-screen event log (P6.5): last few swarm/mission lines, bottom-right —
 # web builds have no console. Fed by SwarmManager._log via group "debug_hud".
@@ -115,6 +115,16 @@ var show_gizmo: bool = true:
 		show_gizmo = value
 		if _gizmo_panel != null:
 			_gizmo_panel.visible = value
+
+## Attitude indicator (P6.6 step 5): instrument-style artificial horizon,
+## FPV-only, reads the drone's airframe pitch/roll directly — camera tilt is
+## deliberately ignored (an instrument, not a world-locked overlay).
+var show_attitude: bool = true:
+	set(value):
+		show_attitude = value
+		if _attitude_canvas != null:
+			_attitude_canvas.visible = value
+var _attitude_canvas: Control
 
 var _gizmo_panel: ColorRect
 var _gizmo_canvas: Control
@@ -213,6 +223,7 @@ func _process(delta: float) -> void:
 	_compass_canvas.queue_redraw()
 	_reticle_canvas.queue_redraw()
 	_marker_canvas.queue_redraw()
+	_attitude_canvas.queue_redraw()
 
 	_frame_count += 1
 	if _frame_count >= print_interval:
@@ -276,7 +287,7 @@ func _on_reticle_draw() -> void:
 	if not _reticle_valid:
 		return
 	var center := _reticle_canvas.get_size() * 0.5
-	var color := Color(1.0, 0.72, 0.1) if _reticle_target != null else Color(0.35, 1.0, 0.35, 0.8)
+	var color := HUDTheme.ACCENT if _reticle_target != null else Color(HUDTheme.TEXT.r, HUDTheme.TEXT.g, HUDTheme.TEXT.b, 0.8)
 	var gap := 5.0
 	var arm := 9.0
 	for dir in [Vector2.LEFT, Vector2.RIGHT, Vector2.UP, Vector2.DOWN]:
@@ -326,6 +337,80 @@ func _draw_marker_triangle(pos: Vector2, apex_up: bool) -> void:
 	var base_a := pos + Vector2(-7.0, -dy * 0.4)
 	var base_b := pos + Vector2(7.0, -dy * 0.4)
 	_marker_canvas.draw_colored_polygon(PackedVector2Array([tip, base_a, base_b]), MARKER_COLOR)
+
+
+# --- Attitude indicator (P6.6 step 5) ---
+# Classic instrument-style artificial horizon: reads the airframe's own pitch/
+# roll (NOT camera tilt — an instrument is world-referenced to the airframe,
+# not to wherever the pilot happens to be looking) and draws it centered on
+# screen. FPV-only, same gate as the dispatch reticle.
+const ATTITUDE_PX_PER_DEG: float = 10.0
+const ATTITUDE_LADDER_RADIUS: float = 180.0  # clip radius — keeps the ~±18° window at 2x scale
+const ATTITUDE_LADDER_HALF_WIDTH: float = 80.0  # rung half-length at the horizon
+const ATTITUDE_CENTER_MARK_SIZE: float = 40.0   # fixed winged-W half-span
+const ATTITUDE_HORIZON_GAP: float = 16.0        # center gap in the 0° line, for clean aiming
+
+
+func _on_attitude_draw() -> void:
+	if _drone == null or not show_attitude or not _drone.is_fpv_enabled():
+		return
+	var center := _attitude_canvas.get_size() * 0.5
+	var euler: Vector3 = _drone.global_transform.basis.get_euler()
+	var pitch_deg: float = rad_to_deg(euler.x)
+	var roll_deg: float = rad_to_deg(euler.z)
+
+	# Nose up (pitch_deg > 0) must push the horizon DOWN on screen (more sky
+	# above the fixed center mark) — standard artificial-horizon convention.
+	var pitch_offset: float = pitch_deg * ATTITUDE_PX_PER_DEG
+	# roll_deg is euler.z; verified against Basis math that rotating the ladder
+	# by +roll_deg (no sign flip) reproduces the real-horizon tilt seen during
+	# a physical bank (Godot's Y-up right-handed screen-space rotation already
+	# matches the world-horizon projection into the drone's local frame).
+	var roll_rad: float = deg_to_rad(roll_deg)
+
+	# Ladder rungs every 10° across the full ±170° range, each a horizontal tick
+	# offset by pitch then the whole assembly rotated about center by roll. The
+	# radius clip keeps only the rungs near the current attitude on screen, so
+	# the instrument stays a compact window while never running out of rungs.
+	for rung_deg in range(-170, 171, 10):
+		var y: float = pitch_offset - rung_deg * ATTITUDE_PX_PER_DEG
+		if absf(y) > ATTITUDE_LADDER_RADIUS:
+			continue
+		if rung_deg == 0:
+			# Horizon: wider, and split around center so the aircraft mark reads
+			# clean and steady aiming is easy.
+			var hw: float = ATTITUDE_LADDER_HALF_WIDTH * 1.4
+			var g: float = ATTITUDE_HORIZON_GAP
+			_draw_outlined_line(_attitude_canvas,
+				(Vector2(-hw, y)).rotated(roll_rad) + center,
+				(Vector2(-g, y)).rotated(roll_rad) + center, true)
+			_draw_outlined_line(_attitude_canvas,
+				(Vector2(g, y)).rotated(roll_rad) + center,
+				(Vector2(hw, y)).rotated(roll_rad) + center, true)
+			continue
+		var half_w: float = ATTITUDE_LADDER_HALF_WIDTH
+		var a := (Vector2(-half_w, y)).rotated(roll_rad) + center
+		var b := (Vector2(half_w, y)).rotated(roll_rad) + center
+		_draw_outlined_line(_attitude_canvas, a, b, false)
+		var label := "%d" % absi(rung_deg)
+		var label_pos := (Vector2(half_w + 14.0, y)).rotated(roll_rad) + center
+		_draw_centered(label, label_pos, HUDTheme.INSTRUMENT, _attitude_canvas)
+
+	# Fixed center reference (winged-W) — never moves with pitch/roll.
+	var s := ATTITUDE_CENTER_MARK_SIZE
+	_draw_outlined_line(_attitude_canvas, center + Vector2(-s, 0.0), center + Vector2(-s * 0.3, 0.0), false)
+	_draw_outlined_line(_attitude_canvas, center + Vector2(s * 0.3, 0.0), center + Vector2(s, 0.0), false)
+	_draw_outlined_line(_attitude_canvas, center + Vector2(-s * 0.3, 0.0), center + Vector2(0.0, s * 0.35), false)
+	_draw_outlined_line(_attitude_canvas, center + Vector2(0.0, s * 0.35), center + Vector2(s * 0.3, 0.0), false)
+	_attitude_canvas.draw_circle(center, 2.0, HUDTheme.INSTRUMENT)
+
+
+## Dark outline pass underneath a white instrument line (same technique as the
+## wind arrow, _on_wind_draw), so it reads against both sky and ground.
+func _draw_outlined_line(canvas: Control, a: Vector2, b: Vector2, bold: bool) -> void:
+	var w: float = 2.4 if bold else 1.6  # ~20% thinner than the first cut
+	canvas.draw_line(a, b, HUDTheme.OUTLINE, w + 2.0, false)
+	canvas.draw_line(a, b, HUDTheme.INSTRUMENT, w, false)
 
 
 func _on_crash_detected() -> void:
@@ -506,9 +591,9 @@ func _build_ui() -> void:
 	_post_layer.add_child(_ps2_rect)
 
 	_bg = ColorRect.new()
-	_bg.color = Color(0.0, 0.0, 0.0, 0.65)
+	_bg.color = HUDTheme.PANEL
 	_bg.set_anchors_preset(Control.PRESET_TOP_LEFT)
-	_bg.offset_right = 280.0
+	_bg.offset_right = 192.0
 	_bg.offset_bottom = 374.0  # fits the telemetry text incl. AGL + signal lines
 	_bg.offset_left = 8.0
 	_bg.offset_top = 8.0
@@ -521,8 +606,8 @@ func _build_ui() -> void:
 	_label.offset_top = 14.0
 	_label.offset_right = 282.0
 	_label.offset_bottom = 376.0
-	_label.add_theme_color_override("font_color", Color(0.35, 1.0, 0.35))
-	_label.add_theme_color_override("font_outline_color", Color(0, 0, 0))
+	_label.add_theme_color_override("font_color", HUDTheme.TEXT)
+	_label.add_theme_color_override("font_outline_color", HUDTheme.OUTLINE)
 	_label.add_theme_constant_override("outline_size", 2)
 	_label.text = "Waiting for drone..."
 	add_child(_label)
@@ -537,14 +622,14 @@ func _build_ui() -> void:
 	_coord_label.offset_right = -8.0
 	_coord_label.offset_bottom = 22.0
 	_coord_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	_coord_label.add_theme_color_override("font_color", Color(0.35, 1.0, 0.35))
-	_coord_label.add_theme_color_override("font_outline_color", Color(0, 0, 0))
+	_coord_label.add_theme_color_override("font_color", HUDTheme.TEXT)
+	_coord_label.add_theme_color_override("font_outline_color", HUDTheme.OUTLINE)
 	_coord_label.add_theme_constant_override("outline_size", 1)
 	_coord_label.text = "X    0.00  Y    0.00  Z    0.00"
 	add_child(_coord_label)
 
 	_gizmo_panel = ColorRect.new()
-	_gizmo_panel.color = Color(0.0, 0.0, 0.0, 0.65)
+	_gizmo_panel.color = HUDTheme.PANEL
 	_gizmo_panel.set_anchors_preset(Control.PRESET_TOP_RIGHT)
 	_gizmo_panel.offset_left = -170.0
 	_gizmo_panel.offset_top = 30.0
@@ -567,14 +652,14 @@ func _build_ui() -> void:
 	_wind_label.offset_right = -8.0
 	_wind_label.offset_bottom = 154.0
 	_wind_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	_wind_label.add_theme_color_override("font_color", Color(0.35, 1.0, 0.35))
-	_wind_label.add_theme_color_override("font_outline_color", Color(0, 0, 0))
+	_wind_label.add_theme_color_override("font_color", HUDTheme.TEXT)
+	_wind_label.add_theme_color_override("font_outline_color", HUDTheme.OUTLINE)
 	_wind_label.add_theme_constant_override("outline_size", 1)
 	_wind_label.text = "WIND CALM"
 	add_child(_wind_label)
 
 	_wind_panel = ColorRect.new()
-	_wind_panel.color = Color(0.0, 0.0, 0.0, 0.65)
+	_wind_panel.color = HUDTheme.PANEL
 	_wind_panel.set_anchors_preset(Control.PRESET_TOP_RIGHT)
 	_wind_panel.offset_left = -170.0
 	_wind_panel.offset_top = 162.0
@@ -590,7 +675,7 @@ func _build_ui() -> void:
 	# Compass tape, bottom center — clear of the top-center radar / signal-lost
 	# banners. Semi-transparent strip; the canvas draws the ticks and labels.
 	_compass_panel = ColorRect.new()
-	_compass_panel.color = Color(0.0, 0.0, 0.0, 0.5)
+	_compass_panel.color = HUDTheme.PANEL_COMPASS
 	_compass_panel.clip_contents = true  # keep edge labels inside the strip
 	_compass_panel.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
 	_compass_panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
@@ -621,6 +706,14 @@ func _build_ui() -> void:
 	_marker_canvas.draw.connect(_on_marker_draw)
 	add_child(_marker_canvas)
 
+	# Attitude indicator: full-rect canvas, bare instrument line work centered
+	# on screen, FPV-only (same pattern as the reticle/marker canvases).
+	_attitude_canvas = Control.new()
+	_attitude_canvas.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_attitude_canvas.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_attitude_canvas.draw.connect(_on_attitude_draw)
+	add_child(_attitude_canvas)
+
 	# Event log, bottom-right corner — right-aligned, grows upward.
 	_log_label = Label.new()
 	_log_label.add_theme_font_size_override("font_size", 12)
@@ -632,8 +725,8 @@ func _build_ui() -> void:
 	_log_label.offset_bottom = -8.0
 	_log_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_log_label.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
-	_log_label.add_theme_color_override("font_color", Color(0.35, 1.0, 0.35))
-	_log_label.add_theme_color_override("font_outline_color", Color(0, 0, 0))
+	_log_label.add_theme_color_override("font_color", HUDTheme.TEXT)
+	_log_label.add_theme_color_override("font_outline_color", HUDTheme.OUTLINE)
 	_log_label.add_theme_constant_override("outline_size", 2)
 	add_child(_log_label)
 
@@ -641,8 +734,8 @@ func _build_ui() -> void:
 	_mission_label = Label.new()
 	_mission_label.text = "MISSION SUCCESS"
 	_mission_label.add_theme_font_size_override("font_size", 26)
-	_mission_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.4))
-	_mission_label.add_theme_color_override("font_outline_color", Color(0, 0, 0))
+	_mission_label.add_theme_color_override("font_color", HUDTheme.SUCCESS)
+	_mission_label.add_theme_color_override("font_outline_color", HUDTheme.OUTLINE)
 	_mission_label.add_theme_constant_override("outline_size", 5)
 	_mission_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_mission_label.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
@@ -655,8 +748,8 @@ func _build_ui() -> void:
 	_signal_lost_label = Label.new()
 	_signal_lost_label.text = "SIGNAL LOST"
 	_signal_lost_label.add_theme_font_size_override("font_size", 48)
-	_signal_lost_label.add_theme_color_override("font_color", Color(1.0, 0.15, 0.1))
-	_signal_lost_label.add_theme_color_override("font_outline_color", Color(0, 0, 0))
+	_signal_lost_label.add_theme_color_override("font_color", HUDTheme.ALERT)
+	_signal_lost_label.add_theme_color_override("font_outline_color", HUDTheme.OUTLINE)
 	_signal_lost_label.add_theme_constant_override("outline_size", 6)
 	_signal_lost_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_signal_lost_label.set_anchors_preset(Control.PRESET_CENTER)
@@ -670,8 +763,8 @@ func _build_ui() -> void:
 	_radar_label = Label.new()
 	_radar_label.text = "RADAR SIGNATURE DETECTED — 10s"
 	_radar_label.add_theme_font_size_override("font_size", 28)
-	_radar_label.add_theme_color_override("font_color", Color(1.0, 0.72, 0.1))
-	_radar_label.add_theme_color_override("font_outline_color", Color(0, 0, 0))
+	_radar_label.add_theme_color_override("font_color", HUDTheme.ACCENT)
+	_radar_label.add_theme_color_override("font_outline_color", HUDTheme.OUTLINE)
 	_radar_label.add_theme_constant_override("outline_size", 5)
 	_radar_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_radar_label.set_anchors_preset(Control.PRESET_CENTER_TOP)
@@ -707,9 +800,9 @@ func _on_gizmo_draw() -> void:
 		"Z": Vector3.BACK,
 	}
 	var colors := {
-		"X": Color(1.0, 0.25, 0.25),
-		"Y": Color(0.25, 1.0, 0.25),
-		"Z": Color(0.3, 0.5, 1.0),
+		"X": HUDTheme.GIZMO_X,
+		"Y": HUDTheme.GIZMO_Y,
+		"Z": HUDTheme.GIZMO_Z,
 	}
 
 	for label in ["X", "Y", "Z"]:
@@ -729,7 +822,7 @@ func _on_gizmo_draw() -> void:
 		)
 
 	# Small dot at center
-	_gizmo_canvas.draw_circle(center, 2.0, Color(1, 1, 1, 0.6))
+	_gizmo_canvas.draw_circle(center, 2.0, HUDTheme.GIZMO_CENTER)
 
 
 ## Draws a camera-relative arrow for the ambient wind at the drone's position
@@ -749,7 +842,7 @@ func _on_wind_draw() -> void:
 	var center := panel_size * Vector2(0.5, 0.45)
 
 	if speed < 0.3:
-		_wind_canvas.draw_circle(center, 5.0, Color(0.6, 0.85, 1.0, 0.5))
+		_wind_canvas.draw_circle(center, 5.0, Color(HUDTheme.WIND.r, HUDTheme.WIND.g, HUDTheme.WIND.b, 0.5))
 		return
 
 	var cam_basis := cam.global_transform.basis.inverse()
@@ -773,8 +866,8 @@ func _on_wind_draw() -> void:
 
 	var arrow_len: float = 16.0 + 46.0 * clampf(screen_speed / 8.0, 0.0, 1.0)
 	var alpha: float = smoothstep(0.3, 1.2, speed)
-	var color := Color(0.6, 0.85, 1.0, alpha)
-	var outline := Color(0.0, 0.0, 0.0, alpha * 0.9)
+	var color := Color(HUDTheme.WIND.r, HUDTheme.WIND.g, HUDTheme.WIND.b, alpha)
+	var outline := Color(HUDTheme.OUTLINE.r, HUDTheme.OUTLINE.g, HUDTheme.OUTLINE.b, alpha * 0.9)
 
 	var tip := center + _wind_arrow_dir * arrow_len
 	var head_a := tip + _wind_arrow_dir.rotated(deg_to_rad(150.0)) * 18.0
@@ -834,16 +927,16 @@ func _on_compass_draw() -> void:
 		var nb := int(fposmod(float(d), 360.0))
 		if nb % 45 == 0:
 			_compass_canvas.draw_line(Vector2(x, tick_bottom), Vector2(x, tick_bottom - 9.0),
-				Color(0.35, 1.0, 0.35, fade), 2.0)
+				Color(HUDTheme.TEXT.r, HUDTheme.TEXT.g, HUDTheme.TEXT.b, fade), 2.0)
 			_draw_centered(_CARDINALS[roundi(nb / 45.0)], Vector2(x, label_y),
-				Color(0.35, 1.0, 0.35, fade))
+				Color(HUDTheme.TEXT.r, HUDTheme.TEXT.g, HUDTheme.TEXT.b, fade))
 		elif nb % 15 == 0:
 			_compass_canvas.draw_line(Vector2(x, tick_bottom), Vector2(x, tick_bottom - 7.0),
-				Color(0.35, 1.0, 0.35, fade), 1.5)
-			_draw_centered("%d" % nb, Vector2(x, label_y), Color(0.35, 1.0, 0.35, fade * 0.7))
+				Color(HUDTheme.TEXT.r, HUDTheme.TEXT.g, HUDTheme.TEXT.b, fade), 1.5)
+			_draw_centered("%d" % nb, Vector2(x, label_y), Color(HUDTheme.TEXT.r, HUDTheme.TEXT.g, HUDTheme.TEXT.b, fade * 0.7))
 		else:
 			_compass_canvas.draw_line(Vector2(x, tick_bottom), Vector2(x, tick_bottom - 4.0),
-				Color(0.35, 1.0, 0.35, fade * 0.5), 1.0)
+				Color(HUDTheme.TEXT.r, HUDTheme.TEXT.g, HUDTheme.TEXT.b, fade * 0.5), 1.0)
 
 	# Mission-target bearing dots (group is empty until Phase 6 — safe no-op).
 	if _drone != null:
@@ -861,7 +954,7 @@ func _on_compass_draw() -> void:
 			# ponytail: cleared→green, else amber; per-type colors when Phase 6
 			# gives targets a type enum.
 			var cleared: bool = ("cleared" in t) and t.cleared
-			var dot := Color(0.3, 1.0, 0.3) if cleared else Color(1.0, 0.72, 0.1)
+			var dot := Color(0.3, 1.0, 0.3) if cleared else HUDTheme.ACCENT
 			_compass_canvas.draw_circle(Vector2(tx, dot_y), 3.0, dot)
 
 

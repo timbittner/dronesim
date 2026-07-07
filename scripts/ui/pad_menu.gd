@@ -73,20 +73,9 @@ func _install_glyph_fallback() -> void:
 func _build_entries() -> void:
 	entries = [
 		{
-			"label": "FORMATION",
-			"options": func() -> Array: return SwarmManager.Formation.keys(),
-			"getter": func() -> int:
-				var m := _swarm_manager()
-				return m.formation if m != null else 0,
-			"setter": func(v: int) -> void:
-				var m := _swarm_manager()
-				if m != null:
-					m.formation = v as SwarmManager.Formation
-					print("[Swarm] formation: %s" % SwarmManager.Formation.keys()[v]),
-		},
-		{
 			# Toggles: lands the whole swarm (player included) in place, or
 			# sends everyone back up. Label is a Callable — resolved on refresh.
+			# First entry: it's used far more often than FORMATION.
 			"label": func() -> String:
 				var m := _swarm_manager()
 				return "TAKE OFF" if m != null and m.swarm_landing() else "AUTO-LAND",
@@ -99,6 +88,18 @@ func _build_entries() -> void:
 					m.take_off_all()
 				else:
 					m.land_all(),
+		},
+		{
+			"label": "FORMATION",
+			"options": func() -> Array: return SwarmManager.Formation.keys(),
+			"getter": func() -> int:
+				var m := _swarm_manager()
+				return m.formation if m != null else 0,
+			"setter": func(v: int) -> void:
+				var m := _swarm_manager()
+				if m != null:
+					m.formation = v as SwarmManager.Formation
+					print("[Swarm] formation: %s" % SwarmManager.Formation.keys()[v]),
 		},
 		{
 			"label": func() -> String:
@@ -176,6 +177,30 @@ func _build_hud_entries() -> Array[Dictionary]:
 				var h := _hud()
 				if h != null:
 					h.show_gizmo = (v == 0),
+		},
+		{
+			"label": "ATTITUDE",
+			"options": toggle_options,
+			"getter": func() -> int:
+				var h := _hud()
+				return 0 if h != null and h.show_attitude else 1,
+			"setter": func(v: int) -> void:
+				var h := _hud()
+				if h != null:
+					h.show_attitude = (v == 0),
+		},
+		{
+			"label": "PROP DBG",
+			"options": toggle_options,
+			"getter": func() -> int:
+				if _player == null:
+					_player = get_tree().get_first_node_in_group("player_drone") as DroneController
+				return 0 if _player != null and _player.show_prop_debug else 1,
+			"setter": func(v: int) -> void:
+				if _player == null:
+					_player = get_tree().get_first_node_in_group("player_drone") as DroneController
+				if _player != null:
+					_player.show_prop_debug = (v == 0),
 		},
 	]
 	return out
@@ -373,7 +398,7 @@ func _swarm_manager() -> SwarmManager:
 func _build_ui() -> void:
 	var height := 64.0 + entries.size() * 24.0
 	_panel = ColorRect.new()
-	_panel.color = Color(0.0, 0.0, 0.0, 0.65)  # same panel black as the HUD
+	_panel.color = HUDTheme.PANEL  # same panel black as the HUD
 	_panel.anchor_left = 0.0
 	_panel.anchor_top = 1.0
 	_panel.anchor_right = 0.0
@@ -389,7 +414,7 @@ func _build_ui() -> void:
 	title.text = "SWARM COMMAND"
 	title.position = Vector2(10, 6)
 	title.add_theme_font_size_override("font_size", 13)
-	title.add_theme_color_override("font_color", Color(0.35, 1.0, 0.35))
+	title.add_theme_color_override("font_color", HUDTheme.TEXT)
 	_panel.add_child(title)
 
 	for i in entries.size():
@@ -403,7 +428,7 @@ func _build_ui() -> void:
 	_legend.text = "▲▼ select  ◀▶ change  ✕ apply/enter  ○ abort"
 	_legend.position = Vector2(10, 28 + entries.size() * 24 + 8)
 	_legend.add_theme_font_size_override("font_size", 10)
-	_legend.add_theme_color_override("font_color", Color(0.35, 1.0, 0.35, 0.5))
+	_legend.add_theme_color_override("font_color", Color(HUDTheme.TEXT.r, HUDTheme.TEXT.g, HUDTheme.TEXT.b, 0.5))
 	_panel.add_child(_legend)
 
 	# Closed-state hint line, same corner the panel opens in.
@@ -417,7 +442,7 @@ func _build_ui() -> void:
 	_hint.offset_right = 320
 	_hint.offset_bottom = -10
 	_hint.add_theme_font_size_override("font_size", 11)
-	_hint.add_theme_color_override("font_color", Color(0.35, 1.0, 0.35, 0.55))
+	_hint.add_theme_color_override("font_color", Color(HUDTheme.TEXT.r, HUDTheme.TEXT.g, HUDTheme.TEXT.b, 0.55))
 	add_child(_hint)
 
 
@@ -440,7 +465,7 @@ func _refresh() -> void:
 		else:
 			_rows[i].text = "%s %s" % [cursor, label]
 		_rows[i].add_theme_color_override("font_color",
-				Color(1.0, 0.72, 0.1) if i == selected else Color(0.35, 1.0, 0.35, 0.85))
+				HUDTheme.ACCENT if i == selected else Color(HUDTheme.TEXT.r, HUDTheme.TEXT.g, HUDTheme.TEXT.b, 0.85))
 
 
 ## Grow the row pool and panel/legend geometry to fit the current level's

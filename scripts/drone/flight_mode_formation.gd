@@ -64,6 +64,20 @@ var max_offset: float = 0.4
 ## Altitude PD: collective offset per m of error / per m/s of climb rate.
 var alt_p_gain: float = 0.05
 var alt_d_gain: float = 0.08
+## Terrain height (m) under the drone, pushed by the pilot every tick — used
+## only to derive AGL for the sink-rate cap below.
+var ground_y: float = 0.0
+## Sink (descent) rate always allowed regardless of AGL, m/s. Kept at/above
+## the auto-land descent_rate (1.5) so a normal landing never fights the cap.
+## Range ~1.5 to 4.
+var min_sink_rate: float = 2.0
+## Extra allowed sink per metre of AGL — the cap grows with altitude so a
+## high descent is untouched and only the final approach is limited.
+## Range ~0.2 to 1.0.
+var agl_sink_gain: float = 0.5
+## Collective added per m/s of over-cap sink when arresting a too-fast
+## descent near the ground. Range ~0.05 to 0.3.
+var sink_arrest_gain: float = 0.1
 ## Heading PD → yaw torque (Nm), clamped to the same ±1.5 sticks command.
 var yaw_p_gain: float = 1.2
 var yaw_d_gain: float = 0.3
@@ -148,6 +162,20 @@ func compute(
 		hover_throttle + err.y * alt_p_gain
 			- (current_velocity.y - target_velocity.y) * alt_d_gain,
 		0.05, 1.0)  # floor keeps rotors alive — a follower never throttle-cuts mid-air
+
+	# --- Sink-rate cap: the PD above has no ground awareness, so a target far
+	# below (e.g. a leader down in a valley while the follower spawns on a
+	# hilltop pad) drives collective to the 0.05 floor and free-falls. Cap the
+	# allowed descent rate as a function of AGL — large AGL leaves the cap high
+	# (long descents unaffected), small AGL clamps it down and actively arrests
+	# an over-cap sink by raising collective. strike/landed already returned
+	# above and stay exempt.
+	var agl: float = current_position.y - ground_y
+	var sink: float = -current_velocity.y  # positive while descending
+	var sink_cap: float = maxf(min_sink_rate, agl * agl_sink_gain)
+	if sink > sink_cap:
+		result.collective = maxf(result.collective, clampf(
+			hover_throttle + (sink - sink_cap) * sink_arrest_gain, 0.05, 1.0))
 
 	# --- Heading: PD on yaw error → torque ---
 	# Y-rotation angle θ: nose = −Z at θ=0, positive θ = counterclockwise from

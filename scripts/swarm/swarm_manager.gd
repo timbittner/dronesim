@@ -18,8 +18,10 @@ extends Node3D
 @export var spacing: float = 1.5
 ## RING / BOHR orbit radius, meters.
 @export var ring_radius: float = 4.0
-## Followers fly this many meters above the leader (keeps them out of the
-## player's face and off the ground when the leader sits on the pad).
+## Followers fly this many meters above the leader (0 = same altitude, the
+## default — with a real airborne leader they ride at its altitude). Headless
+## tests that fly a follower to a slot near a ground-level manager set this
+## explicitly for clearance, the same way test_slot_tables sets it.
 @export var altitude_offset: float = 0.0
 ## BOHR orbital angular speed, rad/s.
 @export var bohr_speed: float = 1.2
@@ -47,6 +49,15 @@ enum Formation { LINE, V, RING, BOHR }
 ## Max thrust-direction tilt, rad — sets the terminal speed against drag
 ## (v = g·tan(max_tilt)·mass/drag_c ≈ 30 m/s at 1.0), not just agility.
 @export var max_tilt: float = 1.0
+## Sink rate always allowed regardless of AGL, m/s. Keep at/above descent_rate
+## (1.5) so a normal landing never fights the cap. Range ~1.5 to 4.
+@export var min_sink_rate: float = 2.0
+## Extra allowed sink per metre of AGL — higher permits steeper descents.
+## Range ~0.2 to 1.0.
+@export var agl_sink_gain: float = 0.5
+## Collective added per m/s of over-cap sink when arresting a too-fast
+## descent near the ground. Range ~0.05 to 0.3.
+@export var sink_arrest_gain: float = 0.1
 
 ## Pushed into every pilot each physics tick, like the gains — pilots are
 ## built in code, so these are their only inspector knobs.
@@ -105,7 +116,8 @@ func _ready() -> void:
 func _physics_process(delta: float) -> void:
 	_time += delta
 	for pilot in pilots:
-		pilot.apply_gains(pos_p_gain, pos_i_gain, vel_p_gain, max_speed, max_tilt)
+		pilot.apply_gains(pos_p_gain, pos_i_gain, vel_p_gain, max_speed, max_tilt,
+				min_sink_rate, agl_sink_gain, sink_arrest_gain)
 		pilot.dive_radius = dive_radius
 		pilot.observe_altitude = observe_altitude
 		pilot.loiter_time = loiter_time
@@ -201,6 +213,18 @@ func call_backup() -> bool:
 ## Seconds until CALL BACKUP is available again (0 = ready) — menu countdown.
 func backup_cooldown_left() -> float:
 	return maxf(0.0, _backup_ready_at - _time)
+
+
+## Remove a stranded/self-destructed follower: drops it from `pilots` and frees
+## both drone and pilot. Safe to call from within the pilot's own
+## _physics_process (deferred free, and the array edit happens outside any
+## iteration over `pilots` here). Leaves other pilots' slot_index untouched —
+## a gap in the roster is fine; CALL BACKUP appends at the next index.
+func remove_follower(pilot: FollowerPilot) -> void:
+	pilots.erase(pilot)
+	if is_instance_valid(pilot.drone):
+		pilot.drone.queue_free()
+	pilot.queue_free()
 
 
 ## Terrain height under (x, z) for auto-land; y 0 without a terrain node.

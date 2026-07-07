@@ -51,8 +51,8 @@ The same suites run in CI (`.github/workflows/ci.yml`) on every push.
 
 ## Project docs
 
-- [PROJECT_SUMMARY.md](PROJECT_SUMMARY.md) — architecture, flight pipeline,
-  tuning parameters
+- [PROJECT_SUMMARY.md](PROJECT_SUMMARY.md) — architecture + system index
+  (per-script detail and the full tuning table live under `docs/systems/`)
 - [AGENTS.md](AGENTS.md) — project guide / conventions (agent-oriented)
 - `plans/` — implementation plans and long-term backlog
 
