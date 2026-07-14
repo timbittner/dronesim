@@ -65,6 +65,16 @@ var _radar_pulse: float = 0.0
 var _airspace: Node = null
 var _airspace_searched: bool = false
 
+# No-fly zone warning (P7.1): pulsing red banner while any SHOOT_DOWN
+# NoFlyZone (group "no_fly_zones", lazily resolved) tracks the player drone —
+# same tracking/seconds_left contract as AirspaceControl. JAMMING zones never
+# set `tracking`, so they never banner. Stacked below the radar banner (both
+# can be live at once, e.g. climbing inside a zone).
+var _zone_label: Label
+var _zone_pulse: float = 0.0
+var _zones: Array = []
+var _zones_searched: bool = false
+
 # Mission success banner (P5 Phase 6): shown once the MissionTracker (group
 # "mission_tracker", lazily resolved) reports all targets cleared. No tracker in
 # the scene = no banner.
@@ -210,6 +220,7 @@ func _process(delta: float) -> void:
 
 	_update_crash_overlay(delta)
 	_update_radar_banner(delta)
+	_update_zone_banner(delta)
 	_update_mission_banner()
 	_update_mission_objectives()
 
@@ -489,6 +500,27 @@ func _update_radar_banner(delta: float) -> void:
 		_radar_label.modulate.a = 0.6 + 0.4 * sin(_radar_pulse * 6.0)
 	else:
 		_radar_pulse = 0.0
+
+
+## No-fly zone (SHOOT_DOWN) warning — mirrors _update_radar_banner, but scans
+## the (possibly multiple) "no_fly_zones" group for the one currently
+## tracking the player, since zones are per-instance rather than a singleton.
+func _update_zone_banner(delta: float) -> void:
+	if not _zones_searched:
+		_zones_searched = true
+		_zones = get_tree().get_nodes_in_group("no_fly_zones")
+	var tracked: Node = null
+	for z in _zones:
+		if is_instance_valid(z) and z.tracking:
+			tracked = z
+			break
+	_zone_label.visible = tracked != null
+	if tracked != null:
+		_zone_pulse += delta
+		_zone_label.text = "NO-FLY ZONE\nLEAVE — %d" % ceili(tracked.seconds_left)
+		_zone_label.modulate.a = 0.6 + 0.4 * sin(_zone_pulse * 6.0)
+	else:
+		_zone_pulse = 0.0
 
 
 func _update_mission_banner() -> void:
@@ -854,6 +886,21 @@ func _build_ui() -> void:
 	_radar_label.offset_top = 70.0
 	_radar_label.visible = false
 	add_child(_radar_label)
+
+	# No-fly zone warning: same style family, ALERT red (a harder threat than
+	# the amber radar warning), stacked below it.
+	_zone_label = Label.new()
+	_zone_label.text = "NO-FLY ZONE\nLEAVE — 10"
+	_zone_label.add_theme_font_size_override("font_size", 28)
+	_zone_label.add_theme_color_override("font_color", HUDTheme.ALERT)
+	_zone_label.add_theme_color_override("font_outline_color", HUDTheme.OUTLINE)
+	_zone_label.add_theme_constant_override("outline_size", 5)
+	_zone_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_zone_label.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	_zone_label.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	_zone_label.offset_top = 110.0
+	_zone_label.visible = false
+	add_child(_zone_label)
 
 
 ## Append a line to the on-screen event log (bottom-right, last 8 lines).

@@ -1,0 +1,16 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://scripts/mission/no_fly_zone.gd" id="1_kcu8x"]
+
+[sub_resource type="Curve3D" id="Curve3D_pg1q4"]
+_data = {
+"points": PackedVector3Array(0, 0, 0, 0, 0, 0, -100, 0, -100, 0, 0, 0, 0, 0, 0, 100, 0, -100, 0, 0, 0, 0, 0, 0, 100, 0, 100, 0, 0, 0, 0, 0, 0, -100, 0, 100),
+"tilts": PackedFloat32Array(0, 0, 0, 0)
+}
+point_count = 4
+
+[node name="NoFlyZone" type="Node3D" unique_id=859952360]
+script = ExtResource("1_kcu8x")
+
+[node name="Footprint" type="Path3D" parent="." unique_id=1548572772]
+curve = SubResource("Curve3D_pg1q4")
