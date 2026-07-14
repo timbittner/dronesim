@@ -4,7 +4,7 @@ A 3D drone flight simulator in **Godot 4.7 / GDScript** with **Jolt Physics**.
 Single drone, flyable with a PS5 DualSense controller. Real-world terrain,
 chase/FPV cameras, debug HUD.
 
-Current phase: **P6.6 complete** (per-phase breakdown in AGENTS.md). The stack
+Current phase: **P7.1 complete** (per-phase breakdown in AGENTS.md). The stack
 so far: per-rotor thrust vectoring, plus **Phase B assisted
 flight modes** (altitude hold + brake), **Phase C crash / signal loss**, and
 **Phase D wind system** — both acro and stabilized modes use individual rotor
@@ -44,7 +44,12 @@ adds per-prop obstruction (a clipped prop cuts thrust so the airframe tumbles;
 hard hits break a rotor for good; stranded followers self-destruct), a shared
 `HUDTheme` palette, an instrument-style FPV attitude indicator, and the
 per-system doc split into `docs/systems/`.
-18 + 6 + 3 + 8 + 4 + 17 headless tests pass.
+**P7.1 missions** adds a bottom-right mission-objectives HUD panel, a
+polygonal `NoFlyZone` (JAMMING soft-edge signal degradation or a SHOOT_DOWN
+countdown mirroring `AirspaceControl`), real payload physics on
+`DroneController` (mass/CoG shift, droppable Blender-authored crate), and a
+`MissionTarget.Type.DELIVER` cleared by a landed payload.
+18 + 6 + 3 + 8 + 9 + 17 headless tests pass.
 
 ---
 
@@ -73,9 +78,10 @@ Main (Node3D)
 │   └── WindParticles (MultiMeshInstance3D)
 ├── SignalField (Node3D)             # signal-quality field: boundary belt + jammers (P5)
 ├── AirspaceControl (Node)           # radar ceiling / shoot-down (P5)
-├── TargetObserve*/TargetCrash* (MissionTarget Node3D)  # editor-placeable objectives (P5)
+├── TargetObserve*/TargetCrash* (MissionTarget Node3D)  # editor-placeable objectives, incl. DELIVER type (P5/P7)
 ├── MissionTracker (Node)            # fires mission_completed when all cleared (P5)
 ├── JammingNode (Node3D)             # EW truck, group "jammers" (P5)
+├── NoFlyZone (Node3D)                # polygonal JAMMING/SHOOT_DOWN zone (P7)
 ├── FlightRecorder (Node)         # JSONL telemetry per physics tick (P3)
 ├── ChaseCamera (Camera3D)
 └── DebugHUD (CanvasLayer)          # HUD + PS2/static post shader on sub-layers (P5)
@@ -101,7 +107,7 @@ obstruction): [docs/systems/flight.md](docs/systems/flight.md).
 Full per-script deep-dives live in `docs/systems/`, split along these lines:
 
 - **Flight** (`docs/systems/flight.md`) — `drone_controller.gd` (core mixer,
-  crash detection, wind drag, prop obstruction), `flight_mode_base.gd`,
+  crash detection, wind drag, prop obstruction, payload mass/CoG), `flight_mode_base.gd`,
   `flight_mode_acro.gd`, `flight_mode_stabilized.gd`,
   `flight_mode_altitude_hold.gd`, `brake_assist.gd`, and the
   `flight_mode_test.gd` harness.
@@ -114,7 +120,8 @@ Full per-script deep-dives live in `docs/systems/`, split along these lines:
   `osm_terrain.gd`, `osm_terrain_test.gd`.
 - **Gamification** (`docs/systems/gamification.md`) — `signal_field.gd`,
   `ps2_post.gdshader`, `airspace_control.gd`, the compass tape, mission
-  targets/tracker, `jamming_node.gd`, `mission_test.gd`.
+  targets/tracker, `jamming_node.gd`, `no_fly_zone.gd`, `payload.gd`, the
+  mission-objectives HUD panel, `mission_test.gd`.
 - **Swarm** (`docs/systems/swarm.md`) — `swarm_manager.gd`,
   `flight_mode_formation.gd`, `follower_pilot.gd`, `pad_menu.gd`, the
   dispatch reticle/marker, `swarm_test.gd`.
@@ -132,14 +139,17 @@ buildings, `osm_terrain_test.gd`): [docs/systems/terrain.md](docs/systems/terrai
 
 ---
 
-## Gamification (P5)
+## Gamification (P5 / P7.1)
 
 Analog-FPV identity, boundaries with consequences: one `SignalField` scalar
 (map-boundary belt + jammers) feeds FPV/3PV static, control packet loss, and
 `lose_signal()`; an `AirspaceControl` radar ceiling reuses the same trigger;
-a PUBG-style compass tape; editor-placeable `MissionTarget`s (observe/crash)
-+ `MissionTracker`; a Blender-authored `JammingNode`. Detail (signal-quality
-math, the PS2 post shader, mission target/tracker mechanics, `mission_test.gd`):
+a PUBG-style compass tape; editor-placeable `MissionTarget`s (observe/crash/
+deliver) + `MissionTracker`; a Blender-authored `JammingNode`. **P7.1** adds a
+polygonal `NoFlyZone` (JAMMING soft edge or SHOOT_DOWN countdown), real
+payload physics + a droppable crate, and a mission-objectives HUD panel.
+Detail (signal-quality math, the PS2 post shader, mission target/tracker
+mechanics, no-fly zone modes, payload landed-detection, `mission_test.gd`):
 [docs/systems/gamification.md](docs/systems/gamification.md).
 
 ---

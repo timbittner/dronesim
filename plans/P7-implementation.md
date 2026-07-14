@@ -14,6 +14,12 @@ Branches are sequential because 7.2 edits files 7.1 creates (`no_fly_zone.gd`, `
 
 ## PR 7.1 — Missions (`p7.1-missions`)
 
+**Status:** shipped (`b968a13` mission HUD panel + plan, `93cb7b7` NoFlyZone
+JAMMING/SHOOT_DOWN, `b8199e3` payload physics, `081dc40` DELIVER type).
+Remaining as in-editor authoring tasks, not code: redraw `main.tscn`'s placed
+`NoFlyZone` footprint (it fell back to the default 200 m square rectangle
+when the polygon footprint landed) and place a DELIVER `MissionTarget`.
+
 **New:** `scripts/mission/no_fly_zone.gd` (+ `scenes/mission/no_fly_zone.tscn`), `scripts/mission/payload.gd` + `scenes/mission/payload.tscn` with **Blender-authored geometry**: `assets/models/payload.blend` → `payload.glb` (jammer.blend precedent; export via Blender MCP), mesh visible/inspectable in the editor. Drop instantiates `payload.tscn`.
 **Modified:** `mission_target.gd`, `drone_controller.gd`, `debug_hud.gd`, `pad_menu.gd`, `mission_test.gd` + its scene, `main.tscn`.
 

@@ -59,3 +59,10 @@ Part of the DroneSim reference; see [PROJECT_SUMMARY.md](../../PROJECT_SUMMARY.m
 | Prop obstruction show_prop_debug | drone_controller.gd | false (inspector + HUD "PROP DBG" toggle) |
 | Stranded self-destruct stranded_timeout | follower_pilot.gd | 10.0 s |
 | Swarm altitude_offset (P6.6 clearance bump) | swarm_manager.gd | 1.5 m (was 0.0) |
+| Payload payload_mass | drone_controller.gd | 0.5 kg |
+| Payload payload_offset (belly attach, local) | drone_controller.gd | (0, -0.12, 0) m |
+| NoFlyZone strength (JAMMING) | no_fly_zone.gd | 1.0, range 0.0–1.0 |
+| NoFlyZone edge_falloff (JAMMING soft edge) | no_fly_zone.gd | 10.0 m |
+| NoFlyZone countdown_time (SHOOT_DOWN) | no_fly_zone.gd | 10.0 s |
+| NoFlyZone terrain_path | no_fly_zone.gd | `../Terrain` |
+| Payload scene mass | payload.tscn (Payload RigidBody3D) | 0.5 kg |

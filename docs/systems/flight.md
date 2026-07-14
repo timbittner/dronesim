@@ -102,6 +102,49 @@ amber, broken = red). Meshes are lazily built on first enable and freed the
 moment the flag goes false — zero cost while off, since `_update_prop_debug`
 is only ever called from behind `if show_prop_debug`.
 
+**Payload (P7.1)** — `payload_mass` (0.5 kg) and `payload_offset` (belly,
+local, `(0, -0.12, 0)`) exports; `has_payload: bool` survives `reset()` (a
+reset is loadout, not damage — only `drop_payload()` clears it). While
+attached there is **no separate physics body** — a jointed body under a 2 kg
+quad is solver pain for zero benefit — it's mass + CoM math on the airframe
+itself:
+- `is_landed()` — `_state == FLYING and _body_in_contact and
+  linear_velocity.length() < 0.3`. `_body_in_contact` is already maintained
+  by the crash-detection contact monitor above; this just reads it.
+- `load_payload()` — refuses if `has_payload` or not `is_landed()` (no
+  clipping a crate onto a mid-air drone with a magic force to hold it there).
+  Attaches the payload GLB as a child at `payload_offset`, adds `payload_mass`
+  to `mass`, switches `center_of_mass_mode` to `CUSTOM` with `center_of_mass =
+  payload_offset * (payload_mass / mass)` — the airframe's own CoM is ≈origin,
+  so this is just the payload's lever arm scaled by its share of the new
+  total mass — then calls `_recompute_hover()`.
+- `drop_payload()` — frees the mesh, restores `mass` and `center_of_mass_mode
+  = AUTO`, calls `_recompute_hover()`, and spawns a free `Payload` RigidBody
+  (`scripts/mission/payload.gd`) at the world attach point with
+  `linear_velocity = self.linear_velocity` — it just falls, no impulse,
+  rotor-only physics stays intact — plus a brief collision exception against
+  this body so it doesn't spawn-overlap-pop.
+- **`_recompute_hover()`** — the critical bit, since `hover_throttle` is
+  normally computed once in `_ready` and copied into each mode at
+  construction:
+  ```gdscript
+  func _recompute_hover() -> void:
+      hover_throttle = (mass * _gravity) / (4.0 * max_thrust)
+      _altitude_hold.hover_throttle = hover_throttle
+      for m in _flight_modes.values():
+          if "hover_throttle" in m:
+              m.hover_throttle = hover_throttle
+  ```
+  The dict loop covers every installed mode, including externally-registered
+  ones like `FlightModeFormation` (`set_flight_mode_object` registers into
+  `_flight_modes`) — followers never carry payloads, so `SwarmManager` needed
+  no changes.
+- **Crash threshold, deliberately mass-relative** — `crash_momentum_threshold`
+  is a fixed kg·m/s value, so a loaded drone (more `mass`) crosses it at a
+  lower impact *speed* than an unloaded one (~3.2 m/s vs. ~4 m/s at the
+  default `payload_mass`). This is physically honest — a heavier airframe
+  really does hit harder at the same speed — and left as-is, not compensated.
+
 ### `scripts/drone/flight_mode_base.gd` — Abstract Base
 
 `FlightModeBase extends RefCounted`. Virtual method:
