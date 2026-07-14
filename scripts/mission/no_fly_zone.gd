@@ -102,15 +102,19 @@ func _cache_footprint() -> void:
 
 
 ## Live-editing support: dragging a Footprint point handle in the editor
-## rebuilds the polygon + marker immediately.
+## rebuilds the polygon + marker immediately. Connected to the Path3D NODE's
+## curve_changed (not the curve resource's `changed`) — the editor replaces
+## the curve instance when creating the editable-children/local-to-scene
+## override copy, which would orphan a resource-level connection and leave
+## the marker stale until a scene reload.
 func _connect_footprint_signal() -> void:
 	if not Engine.is_editor_hint():
 		return
 	var footprint := get_node_or_null("Footprint") as Path3D
-	if footprint == null or footprint.curve == null:
+	if footprint == null:
 		return
-	if not footprint.curve.changed.is_connected(_on_footprint_changed):
-		footprint.curve.changed.connect(_on_footprint_changed)
+	if not footprint.curve_changed.is_connected(_on_footprint_changed):
+		footprint.curve_changed.connect(_on_footprint_changed)
 
 
 func _on_footprint_changed() -> void:
