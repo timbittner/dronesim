@@ -3,6 +3,7 @@
 [ext_resource type="Script" path="res://scripts/mission/no_fly_zone.gd" id="1_kcu8x"]
 
 [sub_resource type="Curve3D" id="Curve3D_pg1q4"]
+resource_local_to_scene = true
 _data = {
 "points": PackedVector3Array(0, 0, 0, 0, 0, 0, -100, 0, -100, 0, 0, 0, 0, 0, 0, 100, 0, -100, 0, 0, 0, 0, 0, 0, 100, 0, 100, 0, 0, 0, 0, 0, 0, -100, 0, 100),
 "tilts": PackedFloat32Array(0, 0, 0, 0)
