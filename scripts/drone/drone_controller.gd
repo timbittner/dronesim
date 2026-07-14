@@ -109,6 +109,16 @@ const _PROP_DEBUG_COLORS: Array[Color] = [
 	Color(1.0, 0.15, 0.15, 0.6),  # 2 broken — red
 ]
 
+# --- Payload (P7.1) ---
+@export_group("Payload")
+## Mass of the carried payload in kg (added to the airframe while attached).
+@export var payload_mass: float = 0.5
+## Local attach point on the belly — visual position AND the CoG shift lever arm.
+@export var payload_offset: Vector3 = Vector3(0, -0.12, 0)
+## True while a payload is attached. Survives reset() — a reset is loadout,
+## not damage; drop_payload() is the only way to clear it.
+var has_payload: bool = false
+
 # Per-rotor hover throttle: (mass * gravity) / (4 * max_thrust)
 var hover_throttle: float = 0.0
 
@@ -189,6 +199,8 @@ var last_mix: Array[float] = [0.0, 0.0, 0.0, 0.0]
 const BODY_GLB: PackedScene = preload("res://assets/models/drone_body.glb")
 const ARM_GLB: PackedScene = preload("res://assets/models/arm.glb")
 const PROP_GLB: PackedScene = preload("res://assets/models/propeller.glb")
+const PAYLOAD_GLB: PackedScene = preload("res://assets/models/payload.glb")
+const PAYLOAD_SCENE: PackedScene = preload("res://scenes/mission/payload.tscn")
 
 # Front rotors (FL/FR) and back rotors (BL/BR) use different-colored Blender
 # props for at-a-glance orientation; idle mesh + spin-disc tint tracked per rotor.
@@ -863,3 +875,69 @@ func is_fpv_enabled() -> bool:
 ## inputs ignored except reset and camera toggle).
 func is_crashed() -> bool:
 	return _state == State.CRASHED
+
+
+# --- Payload (P7.1) ---
+
+## Resting on the ground with the rotors not actively climbing — the LOAD
+## rule (no clipping a crate onto a drone mid-air with a magic force to hold
+## it there).
+func is_landed() -> bool:
+	return _state == State.FLYING and _body_in_contact and linear_velocity.length() < 0.3
+
+
+## Attach a payload crate to the belly: adds its mass, shifts the CoG toward
+## the attach point (a real lever arm — off-center rotor-only physics, same
+## as an unbalanced real drone), and re-derives hover_throttle. Refuses if
+## one is already attached or the drone isn't is_landed().
+func load_payload() -> bool:
+	if has_payload or not is_landed():
+		return false
+	var mesh_inst := PAYLOAD_GLB.instantiate()
+	mesh_inst.name = "PayloadMesh"
+	mesh_inst.position = payload_offset
+	add_child(mesh_inst)
+	mass += payload_mass
+	center_of_mass_mode = RigidBody3D.CENTER_OF_MASS_MODE_CUSTOM
+	# Airframe CoM ≈ origin, so the shift is the payload's lever arm scaled by
+	# its share of the new total mass.
+	center_of_mass = payload_offset * (payload_mass / mass)
+	_recompute_hover()
+	has_payload = true
+	print("[Drone] Payload loaded (+%.2f kg)" % payload_mass)
+	return true
+
+
+## Detach the carried payload: restores mass/CoG and spawns a free-falling
+## Payload crate at the attach point. It inherits this drone's velocity — no
+## impulse, it just falls (rotor-only physics stays intact) — with a brief
+## collision exception against this body so it doesn't spawn-overlap-pop.
+func drop_payload() -> bool:
+	if not has_payload:
+		return false
+	var mesh_inst := get_node_or_null("PayloadMesh")
+	if mesh_inst != null:
+		mesh_inst.queue_free()
+	mass -= payload_mass
+	center_of_mass_mode = RigidBody3D.CENTER_OF_MASS_MODE_AUTO
+	_recompute_hover()
+	has_payload = false
+
+	var payload := PAYLOAD_SCENE.instantiate() as Payload
+	get_parent().add_child(payload)
+	payload.global_position = to_global(payload_offset)
+	payload.linear_velocity = linear_velocity
+	payload.mass = payload_mass
+	payload.add_collision_exception_with(self)
+	print("[Drone] Payload dropped")
+	return true
+
+
+## Re-derive hover throttle after a runtime mass change (payload load/drop)
+## and push it into every mode that cached it at _ready time.
+func _recompute_hover() -> void:
+	hover_throttle = (mass * _gravity) / (4.0 * max_thrust)
+	_altitude_hold.hover_throttle = hover_throttle
+	for m in _flight_modes.values():
+		if "hover_throttle" in m:
+			m.hover_throttle = hover_throttle

@@ -113,6 +113,31 @@ func _build_entries() -> void:
 					m.call_backup(),
 		},
 		{
+			"label": func() -> String:
+				if _player == null:
+					_player = get_tree().get_first_node_in_group("player_drone") as DroneController
+				if _player == null:
+					return "LOAD PAYLOAD"
+				if _player.has_payload:
+					return "DROP PAYLOAD"
+				return "LOAD PAYLOAD" if _player.is_landed() else "LOAD PAYLOAD (land first)",
+			"kind": "action",
+			"action": func() -> void:
+				if _player == null:
+					_player = get_tree().get_first_node_in_group("player_drone") as DroneController
+				if _player == null:
+					return
+				var h := _hud()
+				if _player.has_payload:
+					if _player.drop_payload() and h != null:
+						h.log_line("payload dropped")
+				elif _player.load_payload():
+					if h != null:
+						h.log_line("payload loaded")
+				elif h != null:
+					h.log_line("payload: land first"),
+		},
+		{
 			"label": "HUD",
 			"kind": "submenu",
 			"entries": _build_hud_entries(),

@@ -35,6 +35,8 @@ func _run_all_tests() -> void:
 	await _run_test("test_no_fly_zone_shootdown_countdown")
 	await _run_test("test_lose_signal_enters_crashed")
 	await _run_test("test_tracker_completes_when_all_cleared")
+	await _run_test("test_payload_load_updates_mass_and_hover")
+	await _run_test("test_payload_drop_falls_and_lands")
 
 	var total := _passed + _failed
 	print("[TEST] ========================================")
@@ -280,4 +282,137 @@ func test_tracker_completes_when_all_cleared() -> bool:
 	t2.queue_free()
 	tracker.queue_free()
 	print("[TEST] ", "PASS" if passed else "FAIL", " — completes once, only after all targets cleared")
+	return passed
+
+
+# ---------------------------------------------------------------------------
+# Payload (P7.1) helpers — the test scene has no ground (unlike
+# flight_mode_test_scene.tscn), so a thin StaticBody3D floor is built in code,
+# right under the drone's spawn point, and torn down at the end of each test.
+# ---------------------------------------------------------------------------
+func _make_floor() -> StaticBody3D:
+	var floor_body := StaticBody3D.new()
+	var shape := CollisionShape3D.new()
+	var box := BoxShape3D.new()
+	box.size = Vector3(10, 0.1, 10)
+	shape.shape = box
+	floor_body.add_child(shape)
+	add_child(floor_body)
+	floor_body.position = Vector3(0, -0.05, 0)  # top face at y = 0
+	return floor_body
+
+
+func _free_payloads() -> void:
+	for p in get_tree().get_nodes_in_group("payloads"):
+		(p as Node).queue_free()
+
+
+## Forces the player drone down onto whatever's below it and waits for
+## is_landed(). The default stabilized-mode hover (collective ≈
+## hover_throttle) roughly cancels gravity, so a passive drone never
+## descends on its own — switch to acro and hold throttle-down (idle_throttle
+## * (1 + throttle) hits a true zero-thrust cutoff at throttle = -1, unlike
+## stabilized's collective floor) until it settles, then restore input/mode.
+func _land_drone(budget: int = 120) -> bool:
+	_drone.select_flight_mode("acro")
+	Input.action_press("throttle_down", 1.0)
+	var frames := 0
+	while not _drone.is_landed() and frames < budget:
+		await get_tree().physics_frame
+		frames += 1
+	Input.action_release("throttle_down")
+	_drone.select_flight_mode("stabilized")
+	return _drone.is_landed()
+
+
+# ---------------------------------------------------------------------------
+# load_payload() adds payload_mass to the airframe, re-derives hover_throttle,
+# and pushes it into the modes that cached it at _ready (stabilized,
+# altitude hold); drop_payload() restores both and returns CoM to AUTO.
+# Refuses mid-air (not is_landed()) — pinned right after reset(), before the
+# drone has touched the floor.
+# ---------------------------------------------------------------------------
+func test_payload_load_updates_mass_and_hover() -> bool:
+	print("[TEST] --- test_payload_load_updates_mass_and_hover ---")
+	var floor_body := _make_floor()
+	_drone.reset()
+	await get_tree().physics_frame  # let _integrate_forces see "not touching yet"
+
+	var midair_refused: bool = not _drone.load_payload()
+
+	var landed: bool = await _land_drone()
+
+	var baseline_mass: float = _drone.mass
+	var baseline_hover: float = _drone.hover_throttle
+
+	var loaded: bool = _drone.load_payload()
+	var mass_after_load: float = _drone.mass
+	var expected_hover: float = (mass_after_load * 9.8) / (4.0 * _drone.max_thrust)
+	var hover_ok: bool = is_equal_approx(_drone.hover_throttle, expected_hover) \
+			and is_equal_approx((_drone._flight_modes["stabilized"] as FlightModeStabilized).hover_throttle, expected_hover) \
+			and is_equal_approx(_drone._altitude_hold.hover_throttle, expected_hover)
+
+	var dropped: bool = _drone.drop_payload()
+	var mass_restored: bool = is_equal_approx(_drone.mass, baseline_mass)
+	var hover_restored: bool = is_equal_approx(_drone.hover_throttle, baseline_hover)
+	var com_auto: bool = _drone.center_of_mass_mode == RigidBody3D.CENTER_OF_MASS_MODE_AUTO
+
+	_free_payloads()
+	floor_body.queue_free()
+	_drone.reset()
+
+	print("[TEST] midair_refused=", midair_refused, " landed=", landed, " loaded=", loaded,
+			" mass_after_load=", mass_after_load, " hover_ok=", hover_ok, " dropped=", dropped,
+			" mass_restored=", mass_restored, " hover_restored=", hover_restored, " com_auto=", com_auto)
+
+	var passed := midair_refused and landed and loaded \
+			and is_equal_approx(mass_after_load, baseline_mass + _drone.payload_mass) \
+			and hover_ok and dropped and mass_restored and hover_restored and com_auto
+	print("[TEST] ", "PASS" if passed else "FAIL",
+			" — payload load/drop updates mass + hover_throttle (incl. cached modes), refuses mid-air")
+	return passed
+
+
+# ---------------------------------------------------------------------------
+# drop_payload() spawns a Payload (group "payloads") inheriting the drone's
+# velocity (no impulse — rotor-only physics untouched), which then free-falls
+# onto the floor and settles.
+# ---------------------------------------------------------------------------
+func test_payload_drop_falls_and_lands() -> bool:
+	print("[TEST] --- test_payload_drop_falls_and_lands ---")
+	var floor_body := _make_floor()
+	_drone.reset()
+	await _land_drone()
+
+	_drone.load_payload()
+	_drone.global_position.y += 3.0  # lift off the floor so the crate free-falls
+	var vel_before: Vector3 = _drone.linear_velocity
+
+	var dropped: bool = _drone.drop_payload()
+	# Skip anything still queued from a prior test's _free_payloads() —
+	# queue_free() defers, so a stale instance can still be in the group.
+	var payload: Payload = null
+	for p in get_tree().get_nodes_in_group("payloads"):
+		if not (p as Node).is_queued_for_deletion():
+			payload = p as Payload
+			break
+	var inherited_velocity: bool = payload != null \
+			and payload.linear_velocity.distance_to(vel_before) < 0.01
+
+	var frames := 0
+	while payload != null and not payload.landed and frames < 120:
+		await get_tree().physics_frame
+		frames += 1
+	var landed: bool = payload != null and payload.landed
+
+	print("[TEST] dropped=", dropped, " inherited_velocity=", inherited_velocity,
+			" landed=", landed, " frames=", frames)
+
+	_free_payloads()
+	floor_body.queue_free()
+	_drone.reset()
+
+	var passed := dropped and payload != null and inherited_velocity and landed
+	print("[TEST] ", "PASS" if passed else "FAIL",
+			" — dropped payload inherits drone velocity, free-falls, and lands")
 	return passed
