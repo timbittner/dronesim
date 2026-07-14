@@ -37,6 +37,14 @@ var _frame_count: int = 0
 var _label: Label
 var _bg: ColorRect
 
+# Mission-objectives panel (P7.1): one row per MissionTarget in group
+# "mission_targets", bottom-right above the event log. Absent targets = no
+# panel (nothing to show), same "absent = neutral" pattern as the other HUD
+# nodes. Bottom edge fixed above the log's 8-line footprint; grows upward.
+const MISSIONS_PANEL_BOTTOM: float = -170.0
+var _missions_panel: ColorRect
+var _missions_label: Label
+
 # Crash / signal-loss overlay.
 # The FPV feed dies at the crash instant: if the crash happens while in FPV the
 # last rendered frame is captured and frozen on screen; if it happens in 3PV no
@@ -56,6 +64,16 @@ var _radar_label: Label
 var _radar_pulse: float = 0.0
 var _airspace: Node = null
 var _airspace_searched: bool = false
+
+# No-fly zone warning (P7.1): pulsing red banner while any SHOOT_DOWN
+# NoFlyZone (group "no_fly_zones", lazily resolved) tracks the player drone —
+# same tracking/seconds_left contract as AirspaceControl. JAMMING zones never
+# set `tracking`, so they never banner. Stacked below the radar banner (both
+# can be live at once, e.g. climbing inside a zone).
+var _zone_label: Label
+var _zone_pulse: float = 0.0
+var _zones: Array = []
+var _zones_searched: bool = false
 
 # Mission success banner (P5 Phase 6): shown once the MissionTracker (group
 # "mission_tracker", lazily resolved) reports all targets cleared. No tracker in
@@ -108,6 +126,15 @@ var show_wind: bool = true:
 			_wind_panel.visible = value
 		if _wind_label != null:
 			_wind_label.visible = value
+## Zero targets in the scene keeps the panel hidden regardless of this
+## toggle — enforced in _update_mission_objectives, which runs every frame.
+var show_missions: bool = true:
+	set(value):
+		show_missions = value
+		if _missions_panel != null:
+			_missions_panel.visible = value
+		if _missions_label != null:
+			_missions_label.visible = value
 ## Gizmo panel only — the coord readout above it stays up regardless, so
 ## toggling this just tucks it into the corner.
 var show_gizmo: bool = true:
@@ -193,7 +220,9 @@ func _process(delta: float) -> void:
 
 	_update_crash_overlay(delta)
 	_update_radar_banner(delta)
+	_update_zone_banner(delta)
 	_update_mission_banner()
+	_update_mission_objectives()
 
 	var fpv: bool = _drone.is_fpv_enabled()
 	var intensity: float = clampf(
@@ -473,6 +502,27 @@ func _update_radar_banner(delta: float) -> void:
 		_radar_pulse = 0.0
 
 
+## No-fly zone (SHOOT_DOWN) warning — mirrors _update_radar_banner, but scans
+## the (possibly multiple) "no_fly_zones" group for the one currently
+## tracking the player, since zones are per-instance rather than a singleton.
+func _update_zone_banner(delta: float) -> void:
+	if not _zones_searched:
+		_zones_searched = true
+		_zones = get_tree().get_nodes_in_group("no_fly_zones")
+	var tracked: Node = null
+	for z in _zones:
+		if is_instance_valid(z) and z.tracking:
+			tracked = z
+			break
+	_zone_label.visible = tracked != null
+	if tracked != null:
+		_zone_pulse += delta
+		_zone_label.text = "NO-FLY ZONE\nLEAVE — %d" % ceili(tracked.seconds_left)
+		_zone_label.modulate.a = 0.6 + 0.4 * sin(_zone_pulse * 6.0)
+	else:
+		_zone_pulse = 0.0
+
+
 func _update_mission_banner() -> void:
 	if not _tracker_searched:
 		_tracker_searched = true
@@ -480,6 +530,40 @@ func _update_mission_banner() -> void:
 	if _tracker == null:
 		return
 	_mission_label.visible = _tracker.completed
+
+
+## Mission-objectives panel (P7.1): one row per MissionTarget, bottom-right
+## above the event log. No targets in the scene = no panel (nothing to list).
+## OBSERVE shows dwell progress, CRASH (and any fallback) shows horizontal
+## distance from the player — a single-color label with ✓/▸ prefixes is the
+## simplest readable per-row state, no per-target Label instances needed.
+func _update_mission_objectives() -> void:
+	var targets := get_tree().get_nodes_in_group("mission_targets")
+	if targets.is_empty():
+		_missions_panel.visible = false
+		_missions_label.visible = false
+		return
+
+	var lines := PackedStringArray(["=== OBJECTIVES ==="])
+	for t in targets:
+		var mt := t as MissionTarget
+		if mt == null:
+			continue
+		var tag: String = MissionTarget.Type.keys()[mt.type]
+		if mt.cleared:
+			lines.append("✓ %s CLEARED" % tag)
+		elif mt.type == MissionTarget.Type.OBSERVE:
+			lines.append("▸ %s %.1f/%.1fs" % [tag, mt._dwell, mt.dwell_time])
+		else:
+			var d: float = Vector2(mt.global_position.x, mt.global_position.z).distance_to(
+					Vector2(_drone.global_position.x, _drone.global_position.z))
+			lines.append("▸ %s %.0fm" % [tag, d])
+
+	_missions_label.text = "\n".join(lines)
+	# Fixed bottom edge, grow the top upward to fit the rows.
+	_missions_panel.offset_top = _missions_panel.offset_bottom - (8.0 + lines.size() * 20.0)
+	_missions_panel.visible = show_missions
+	_missions_label.visible = show_missions
 
 
 func _gather_telemetry() -> Dictionary:
@@ -611,6 +695,36 @@ func _build_ui() -> void:
 	_label.add_theme_constant_override("outline_size", 2)
 	_label.text = "Waiting for drone..."
 	add_child(_label)
+
+	# Mission-objectives panel, bottom-right — stacked directly above the event
+	# log's max footprint (MISSIONS_PANEL_BOTTOM) and growing UPWARD as
+	# objectives are added, so it stays clear of the swarm menu that opens
+	# bottom-left. Panel top is resized per-frame to fit its row count in
+	# _update_mission_objectives; the label is a full-rect child. Starts hidden
+	# — no targets at boot.
+	_missions_panel = ColorRect.new()
+	_missions_panel.color = HUDTheme.PANEL
+	_missions_panel.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	_missions_panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	_missions_panel.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	_missions_panel.offset_left = -200.0
+	_missions_panel.offset_right = -8.0
+	_missions_panel.offset_bottom = MISSIONS_PANEL_BOTTOM
+	_missions_panel.offset_top = MISSIONS_PANEL_BOTTOM - 40.0
+	_missions_panel.visible = false
+	add_child(_missions_panel)
+
+	_missions_label = Label.new()
+	_missions_label.add_theme_font_size_override("font_size", 13)
+	_missions_label.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_missions_label.offset_left = 8.0
+	_missions_label.offset_top = 4.0
+	_missions_label.offset_right = -8.0
+	_missions_label.offset_bottom = -4.0
+	_missions_label.add_theme_color_override("font_color", HUDTheme.TEXT)
+	_missions_label.add_theme_color_override("font_outline_color", HUDTheme.OUTLINE)
+	_missions_label.add_theme_constant_override("outline_size", 2)
+	_missions_panel.add_child(_missions_label)
 
 	# Coord readout: its own top-right label (NOT a gizmo_panel child) so it
 	# stays put when the GIZMO toggle hides the panel below it.
@@ -772,6 +886,21 @@ func _build_ui() -> void:
 	_radar_label.offset_top = 70.0
 	_radar_label.visible = false
 	add_child(_radar_label)
+
+	# No-fly zone warning: same style family, ALERT red (a harder threat than
+	# the amber radar warning), stacked below it.
+	_zone_label = Label.new()
+	_zone_label.text = "NO-FLY ZONE\nLEAVE — 10"
+	_zone_label.add_theme_font_size_override("font_size", 28)
+	_zone_label.add_theme_color_override("font_color", HUDTheme.ALERT)
+	_zone_label.add_theme_color_override("font_outline_color", HUDTheme.OUTLINE)
+	_zone_label.add_theme_constant_override("outline_size", 5)
+	_zone_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_zone_label.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	_zone_label.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	_zone_label.offset_top = 110.0
+	_zone_label.visible = false
+	add_child(_zone_label)
 
 
 ## Append a line to the on-screen event log (bottom-right, last 8 lines).

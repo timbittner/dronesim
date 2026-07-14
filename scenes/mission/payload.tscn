@@ -1,0 +1,7 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://scripts/mission/payload.gd" id="1_payload"]
+
+[node name="Payload" type="RigidBody3D"]
+mass = 0.5
+script = ExtResource("1_payload")

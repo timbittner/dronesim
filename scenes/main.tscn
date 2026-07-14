@@ -15,6 +15,7 @@
 [ext_resource type="PackedScene" path="res://scenes/mission/jamming_node.tscn" id="13_trceg"]
 [ext_resource type="Script" uid="uid://17i8mg7j3nt" path="res://scripts/swarm/swarm_manager.gd" id="14_swarm"]
 [ext_resource type="Script" uid="uid://c4plonfoquk3a" path="res://scripts/ui/pad_menu.gd" id="15_pad_menu"]
+[ext_resource type="PackedScene" path="res://scenes/mission/no_fly_zone.tscn" id="16_jbj1t"]
 
 [sub_resource type="BoxMesh" id="BoxMesh_pad"]
 size = Vector3(2, 0.1, 2)
@@ -41,6 +42,13 @@ fog_enabled = true
 fog_light_color = Color(0.6, 0.55, 0.5, 1)
 fog_density = 0.0005
 fog_sky_affect = 0.193
+
+[sub_resource type="Curve3D" id="Curve3D_jbj1t"]
+_data = {
+"points": PackedVector3Array(0, 0, 0, 0, 0, 0, -61.23813, 0, -36.790314, 0, 0, 0, 0, 0, 0, -12.132477, 5.178173, -102.00049, 0, 0, 0, 0, 0, 0, 52.2507, 0, -39.57007, 0, 0, 0, 0, 0, 0, 64.95392, 0, 64.08243, 0, 0, 0, 0, 0, 0, -8.611847, 0, 79.66556),
+"tilts": PackedFloat32Array(0, 0, 0, 0, 0)
+}
+point_count = 5
 
 [node name="Main" type="Node3D" unique_id=1501016617]
 
@@ -91,13 +99,18 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -458.67947, -51.697716, 283.1
 radius = 25.0
 height = 50.0
 
-[node name="TargetObserveCenter" parent="." unique_id=307638042 instance=ExtResource("11_mission_target")]
+[node name="TargetDeliverCenter" parent="." unique_id=307638042 instance=ExtResource("11_mission_target")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -269.93, -48.13119, 548.768)
+type = 2
 
-[node name="TargetCrashField" parent="." unique_id=1535772233 instance=ExtResource("11_mission_target")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -655.7908, -63.957844, 701.4366)
+[node name="TargetCrashFactory" parent="." unique_id=1535772233 instance=ExtResource("11_mission_target")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -749.40045, -63.957844, 586.37976)
 type = 1
 radius = 30.0
+
+[node name="TargetCrashField" parent="." unique_id=1131435948 instance=ExtResource("11_mission_target")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -31.93541, -26.732124, 217.25224)
+type = 1
 
 [node name="MissionTracker" type="Node" parent="." unique_id=1508678568]
 script = ExtResource("12_mission_tracker")
@@ -119,6 +132,11 @@ script = ExtResource("15_pad_menu")
 [node name="JammingNode" parent="." unique_id=1390709013 instance=ExtResource("13_trceg")]
 transform = Transform3D(-0.30869466, 0, -0.9511612, 0, 1, 0, 0.9511612, 0, -0.30869466, -113.956894, -43.68787, 362.43304)
 
-[node name="MissionTarget" parent="." unique_id=1131435948 instance=ExtResource("11_mission_target")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -31.93541, -26.732124, 217.25224)
-type = 1
+[node name="NoFlyZone2" parent="." unique_id=859952360 instance=ExtResource("16_jbj1t")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -480.25552, -57.704937, 438.5994)
+mode = 1
+
+[node name="Footprint" parent="NoFlyZone2" index="0" unique_id=1548572772]
+curve = SubResource("Curve3D_jbj1t")
+
+[editable path="NoFlyZone2"]

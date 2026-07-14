@@ -9,7 +9,9 @@ extends Node3D
 ## - the map-boundary belt: ramps 1 to 0 across boundary_margin meters outside
 ##   the terrain's get_bounds() rect (duck-typed; no bounds = no belt);
 ## - jamming nodes (group "jammers", each exposing radius + strength) with a
-##   smooth falloff. Sources combine by taking the minimum.
+##   smooth falloff. A jammer may instead expose signal_quality_at(pos) for a
+##   non-circular shape (e.g. a rectangular NoFlyZone). Sources combine by
+##   taking the minimum.
 ## Consumers: FPV static intensity, control packet loss, and sustained-zero
 ## signal loss (DroneController / DebugHUD).
 
@@ -60,7 +62,10 @@ func get_quality(pos: Vector3) -> float:
 	# ponytail: linear scan over jammers — a few distance checks per tick beats
 	# Area3D broadphase + event bookkeeping; spatial grid if count hits hundreds.
 	for jammer in get_tree().get_nodes_in_group("jammers"):
-		q = minf(q, _jammer_quality(jammer, pos))
+		if jammer.has_method("signal_quality_at"):
+			q = minf(q, jammer.signal_quality_at(pos))
+		else:
+			q = minf(q, _jammer_quality(jammer, pos))
 	return q
 
 

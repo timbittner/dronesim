@@ -113,6 +113,31 @@ func _build_entries() -> void:
 					m.call_backup(),
 		},
 		{
+			"label": func() -> String:
+				if _player == null:
+					_player = get_tree().get_first_node_in_group("player_drone") as DroneController
+				if _player == null:
+					return "LOAD PAYLOAD"
+				if _player.has_payload:
+					return "DROP PAYLOAD"
+				return "LOAD PAYLOAD" if _player.is_landed() else "LOAD PAYLOAD (land first)",
+			"kind": "action",
+			"action": func() -> void:
+				if _player == null:
+					_player = get_tree().get_first_node_in_group("player_drone") as DroneController
+				if _player == null:
+					return
+				var h := _hud()
+				if _player.has_payload:
+					if _player.drop_payload() and h != null:
+						h.log_line("payload dropped")
+				elif _player.load_payload():
+					if h != null:
+						h.log_line("payload loaded")
+				elif h != null:
+					h.log_line("payload: land first"),
+		},
+		{
 			"label": "HUD",
 			"kind": "submenu",
 			"entries": _build_hud_entries(),
@@ -158,6 +183,17 @@ func _build_hud_entries() -> Array[Dictionary]:
 				var h := _hud()
 				if h != null:
 					h.show_wind = (v == 0),
+		},
+		{
+			"label": "MISSIONS",
+			"options": toggle_options,
+			"getter": func() -> int:
+				var h := _hud()
+				return 0 if h != null and h.show_missions else 1,
+			"setter": func(v: int) -> void:
+				var h := _hud()
+				if h != null:
+					h.show_missions = (v == 0),
 		},
 		{
 			"label": "AXES",
@@ -410,11 +446,14 @@ func _build_ui() -> void:
 	_panel.visible = false
 	add_child(_panel)
 
+	# Bracketed green header, matching the telemetry / objectives panel titles.
 	var title := Label.new()
-	title.text = "SWARM COMMAND"
+	title.text = "=== SWARM COMMAND ==="
 	title.position = Vector2(10, 6)
 	title.add_theme_font_size_override("font_size", 13)
 	title.add_theme_color_override("font_color", HUDTheme.TEXT)
+	title.add_theme_color_override("font_outline_color", HUDTheme.OUTLINE)
+	title.add_theme_constant_override("outline_size", 2)
 	_panel.add_child(title)
 
 	for i in entries.size():

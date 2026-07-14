@@ -6,7 +6,7 @@ A 3D drone flight simulator built in Godot 4.7 / GDScript, iterating toward a
 drone swarm simulator with realistic flight physics, autonomous routing,
 weather, and threat simulation.
 
-**Current phase:** P6.6 complete. Shipped so far:
+**Current phase:** P7.1 complete. Shipped so far:
 - **P2** — per-rotor thrust vectoring, assisted flight modes (altitude
   hold + brake), crash / signal loss, terrain-aware wind.
 - **P3** — project health: GitHub upstream + CI
@@ -35,6 +35,13 @@ weather, and threat simulation.
   break a rotor for good; all-rotors-dead followers self-destruct), a shared
   `HUDTheme` palette, an instrument-style FPV attitude indicator, and the
   per-system doc split into `docs/systems/`.
+- **P7.1** — missions: a bottom-right mission-objectives HUD panel (`show_missions`
+  toggle, unified `=== HEADER ===` style across telemetry/menu/objectives), a
+  polygonal `NoFlyZone` (JAMMING soft-edge jamming or SHOOT_DOWN countdown,
+  editor-drawn `Path3D` footprint), real payload physics (`payload_mass` +
+  belly `payload_offset` shift the airframe's mass/CoG, a droppable
+  Blender-authored crate), and a `MissionTarget.Type.DELIVER` cleared by a
+  landed payload.
 
 **`PROJECT_SUMMARY.md` is the deep-dive reference** — architecture and a
 per-system index live there, with the detailed per-script internals and the
@@ -69,6 +76,8 @@ scenes/
   mission/                Editor-placeable objectives / props (P5)
     mission_target.tscn
     jamming_node.tscn
+    no_fly_zone.tscn        Polygonal jamming/shoot-down zone (P7)
+    payload.tscn             Droppable crate, spawned by drop_payload() (P7)
   test/                   Headless test scenes
     flight_mode_test_scene.tscn
     wind_test_scene.tscn
@@ -101,24 +110,27 @@ scripts/
     signal_field.gd              Signal quality: boundary belt + jammers + fog wall (P5)
   mission/
     airspace_control.gd          Radar ceiling / shoot-down stub (P5)
-    mission_target.gd            MissionTarget observe/crash, @tool (P5)
+    mission_target.gd            MissionTarget observe/crash/deliver, @tool (P5/P7)
     mission_tracker.gd           Fires mission_completed when all cleared (P5)
     jamming_node.gd              JammingNode EW truck, group "jammers" (P5)
+    no_fly_zone.gd               Polygonal JAMMING/SHOOT_DOWN zone, @tool (P7)
+    payload.gd                   Droppable crate, group "payloads" (P7)
   ui/
-    debug_hud.gd                 Telemetry + wind arrow + compass + banners + post shader + dispatch reticle/marker + event log (P6/P6.5)
-    pad_menu.gd                  DPad swarm command menu + HUD toggle submenu (P6/P6.5)
+    debug_hud.gd                 Telemetry + wind arrow + compass + banners + post shader + dispatch reticle/marker + event log + mission panel (P6/P6.5/P7)
+    pad_menu.gd                  DPad swarm command menu + HUD toggle submenu + payload action (P6/P6.5/P7)
   test/
     flight_mode_test.gd          18 headless tests
     wind_field_test.gd           6 headless wind-field tests
     flight_recorder_test.gd      3 headless telemetry tests
     osm_terrain_test.gd          8 headless map/terrain tests (P4)
-    mission_test.gd              4 headless mission/signal tests (P5)
+    mission_test.gd              9 headless mission/signal/zone/payload tests (P5/P7)
     swarm_test.gd                17 headless swarm tests (P6/P6.6)
     mock_hill_terrain.gd         Deterministic terrain stand-in for wind tests
 assets/
   shaders/ps2_post.gdshader      PS2 look + analog signal static, both views (P5)
   maps/sebexen/                  Baked map (heightmap/classmap/map.json/albedo, checked in)
-  models/                        drone_parts.blend + GLBs; jammer.blend + jammer.glb (P5)
+  models/                        drone_parts.blend + GLBs; jammer.blend + jammer.glb (P5);
+                                  payload.blend + payload.glb (P7)
 tools/
   bake_map.py                    Offline DGM1+OSM → baked map assets (P4)
 ```
@@ -138,7 +150,9 @@ code-built blur discs when armed. Nose faces −Z. Full detail:
 Three layers: `Mode.compute()` → `FlightControl` → `_mix_rotors()` (anti-clip
 scaling + MIN_ROTOR) → `RotorMix` → `apply_force()` at 4 rotor positions +
 `apply_torque()` for yaw → `_apply_angular_damping()`. Full breakdown:
-`PROJECT_SUMMARY.md → Three-Layer Flight Pipeline`.
+`PROJECT_SUMMARY.md → Three-Layer Flight Pipeline`. A runtime mass change
+(payload load/drop, P7.1) recomputes `hover_throttle` via `_recompute_hover()`
+and pushes it into every mode that cached it at `_ready`.
 
 ### Per-system detail — see docs/systems/
 
@@ -150,7 +164,9 @@ Load-bearing invariants that are easy to break, kept here as terse warnings:
   `drone.tscn` — without CCD the thin body tunnels above ~10 m/s). On crash,
   rotor forces stop and physics tumbles the airframe — **no magic forces**.
   Environment-side reactions (dust burst) live in `crash_effects.gd`, not the
-  controller. Detail: `docs/systems/flight.md → drone_controller.gd`,
+  controller. `crash_momentum_threshold` is mass-relative, so a loaded payload
+  (P7.1) lowers the impact speed that counts as a crash — physically honest,
+  deliberate, not a bug. Detail: `docs/systems/flight.md → drone_controller.gd`,
   `docs/systems/environment.md → crash_effects.gd`.
 - **Wind (P2):** relative-airspeed drag, not a magic push. **Do not re-add
   body `linear_damp`** to tune drift/damping — `air_drag_coefficient = 1.0`
@@ -172,8 +188,11 @@ Load-bearing invariants that are easy to break, kept here as terse warnings:
   shader, control packet loss, and (sustained-zero) `lose_signal()` — the
   crash transition minus the impact check, still **rotor-only, no magic
   force**. `AirspaceControl` radar ceiling reuses the same `lose_signal()`.
-  All P5 nodes follow the WindField pattern (group-registered, lazily
-  resolved, absent node = neutral). Detail: `docs/systems/gamification.md`.
+  A jammer may instead expose `signal_quality_at(pos)` for a non-circular
+  shape (P7.1's `NoFlyZone`) — `SignalField` tries that duck-type hook first.
+  All P5/P7 nodes follow the WindField pattern (group-registered, lazily
+  resolved, absent node = neutral), including hostile no-fly zones. Detail:
+  `docs/systems/gamification.md`.
 - **Swarm (P6):** followers are full `DroneController`s (rotor-only, no magic —
   future flight-model work applies to the whole swarm). The **only** radio-side
   data is `SwarmManager.get_leader_state()` (leader pos/vel/heading); a jammed

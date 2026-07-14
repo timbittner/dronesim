@@ -12,6 +12,8 @@ extends Node3D
 ##   above the ground) and stay for `dwell_time` continuous seconds.
 ## - CRASH: crash the drone within `radius` of the marker (listens to the
 ##   drone's crash_detected; a Triangle reset afterwards keeps the run going).
+## - DELIVER: drop a payload crate within `radius`; clears when the crate
+##   comes to rest inside.
 ##
 ## The Y coordinate is irrelevant: the marker is snapped onto the terrain at
 ## _ready (and on every editor move), and the capture volume is ground-anchored.
@@ -21,7 +23,7 @@ extends Node3D
 
 signal target_cleared(target: MissionTarget)
 
-enum Type { OBSERVE, CRASH }
+enum Type { OBSERVE, CRASH, DELIVER }
 
 @export var type: Type = Type.OBSERVE: set = _set_type
 ## Horizontal capture radius in meters.
@@ -79,7 +81,21 @@ func _physics_process(delta: float) -> void:
 				_crash_connected[drone] = true
 				drone.crash_detected.connect(_on_drone_crashed.bind(drone))
 
-	if cleared or type != Type.OBSERVE:
+	if cleared:
+		return
+
+	if type == Type.DELIVER:
+		for p in get_tree().get_nodes_in_group("payloads"):
+			var payload := p as Payload
+			if payload.is_queued_for_deletion() or not payload.landed:
+				continue
+			var d: Vector3 = payload.global_position - global_position
+			if Vector2(d.x, d.z).length() <= radius:
+				_mark_cleared()
+				break
+		return
+
+	if type != Type.OBSERVE:
 		return
 
 	# Cylinder test: within radius horizontally AND inside the height band above
@@ -155,18 +171,26 @@ func _build_marker() -> void:
 	var cyl := CylinderMesh.new()
 	cyl.top_radius = radius
 	cyl.bottom_radius = radius
-	if type == Type.OBSERVE:
-		cyl.height = height
-		cyl.radial_segments = 24
-		_mesh.position.y = height * 0.5
-		_mat.albedo_color = Color(0.15, 0.75, 1.0, 0.28)  # cyan "observe here" volume
-	else:
-		# A low translucent drum, not a flat disc: on uneven terrain a ground-flush
-		# disc clips into slopes and vanishes, so give it vertical presence.
-		cyl.height = 8.0
-		cyl.radial_segments = 32
-		_mesh.position.y = 4.0
-		_mat.albedo_color = Color(1.0, 0.18, 0.12, 0.4)  # red crash zone
+	match type:
+		Type.OBSERVE:
+			cyl.height = height
+			cyl.radial_segments = 24
+			_mesh.position.y = height * 0.5
+			_mat.albedo_color = Color(0.15, 0.75, 1.0, 0.28)  # cyan "observe here" volume
+		Type.CRASH:
+			# A low translucent drum, not a flat disc: on uneven terrain a
+			# ground-flush disc clips into slopes and vanishes, so give it
+			# vertical presence.
+			cyl.height = 8.0
+			cyl.radial_segments = 32
+			_mesh.position.y = 4.0
+			_mat.albedo_color = Color(1.0, 0.18, 0.12, 0.4)  # red crash zone
+		Type.DELIVER:
+			# Same low-drum shape as CRASH, amber instead of red.
+			cyl.height = 8.0
+			cyl.radial_segments = 32
+			_mesh.position.y = 4.0
+			_mat.albedo_color = Color(1.0, 0.72, 0.1, 0.4)  # amber deliver zone
 	cyl.material = _mat
 	_mesh.mesh = cyl
 	_base_color = _mat.albedo_color
