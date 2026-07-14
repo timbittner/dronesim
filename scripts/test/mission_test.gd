@@ -37,6 +37,7 @@ func _run_all_tests() -> void:
 	await _run_test("test_tracker_completes_when_all_cleared")
 	await _run_test("test_payload_load_updates_mass_and_hover")
 	await _run_test("test_payload_drop_falls_and_lands")
+	await _run_test("test_deliver_target_clears_on_landed_payload")
 
 	var total := _passed + _failed
 	print("[TEST] ========================================")
@@ -415,4 +416,62 @@ func test_payload_drop_falls_and_lands() -> bool:
 	var passed := dropped and payload != null and inherited_velocity and landed
 	print("[TEST] ", "PASS" if passed else "FAIL",
 			" — dropped payload inherits drone velocity, free-falls, and lands")
+	return passed
+
+
+# ---------------------------------------------------------------------------
+# DELIVER MissionTarget (P7.1): clears only once a landed payload sits inside
+# radius. Payloads are frozen (RigidBody3D.freeze) so gravity can't move them
+# off their assigned test position between frames — `landed` is set directly,
+# unit-style, no drop physics needed. Order matters: outside-landed, then
+# inside-not-landed, both must NOT clear, only the final inside-landed case
+# clears.
+# ---------------------------------------------------------------------------
+func test_deliver_target_clears_on_landed_payload() -> bool:
+	print("[TEST] --- test_deliver_target_clears_on_landed_payload ---")
+	var floor_body := _make_floor()
+	var target := MissionTarget.new()
+	target.type = MissionTarget.Type.DELIVER
+	target.radius = 20.0
+	target.position = Vector3.ZERO
+	add_child(target)
+	await get_tree().physics_frame
+
+	var outside := Payload.new()
+	outside.freeze = true
+	add_child(outside)
+	outside.global_position = Vector3(50, 0, 0)
+	outside.landed = true
+	await get_tree().physics_frame
+	await get_tree().physics_frame
+	var not_cleared_outside := not target.cleared
+
+	var inside_unsettled := Payload.new()
+	inside_unsettled.freeze = true
+	add_child(inside_unsettled)
+	inside_unsettled.global_position = Vector3(5, 0, 0)
+	inside_unsettled.landed = false
+	await get_tree().physics_frame
+	await get_tree().physics_frame
+	var not_cleared_unsettled := not target.cleared
+
+	var inside_landed := Payload.new()
+	inside_landed.freeze = true
+	add_child(inside_landed)
+	inside_landed.global_position = Vector3(5, 0, 0)
+	inside_landed.landed = true
+	await get_tree().physics_frame
+	await get_tree().physics_frame
+	var cleared := target.cleared
+
+	print("[TEST] not_cleared_outside=", not_cleared_outside,
+			" not_cleared_unsettled=", not_cleared_unsettled, " cleared=", cleared)
+
+	_free_payloads()
+	target.queue_free()
+	floor_body.queue_free()
+
+	var passed := not_cleared_outside and not_cleared_unsettled and cleared
+	print("[TEST] ", "PASS" if passed else "FAIL",
+			" — DELIVER target only clears once a landed payload is inside radius")
 	return passed
